@@ -130,7 +130,7 @@ class ReaderWindow(tk.Frame):
         """
         self.update_idletasks()
 
-        visible_height = max(1, self.text_canvas.winfo_height() - 2 * PAGE_MARGIN)
+        visible_height = max(1, self.text_canvas.winfo_height())
         pages = []
 
         lines_per_page_safety = 8  # stop 1 line early to avoid overshoot
@@ -146,11 +146,11 @@ class ReaderWindow(tk.Frame):
 
             while self._buffer.compare(current_index, "<", end_index):
                 next_line_index = f"{int(current_index.split('.')[0]) + 1}.0"
-                display_lines = int(self._buffer.count(current_index, next_line_index, "displaylines")[0])
+                display_lines = max(1, int(self._buffer.count(current_index, next_line_index, "displaylines")[0]))
 
                 dline = self._buffer.dlineinfo(current_index)
-                line_height = dline[3] if dline else FONT_SIZE_DEFAULT + 4
-                pixel_height = display_lines * line_height
+                line_height = dline[3] if dline else FONT_SIZE_DEFAULT + 8
+                pixel_height = display_lines * line_height + 8
 
                 # Stop if adding this line exceeds visible height or lines safety
                 if used_height + pixel_height > visible_height or (lines_used + display_lines) > (visible_height // line_height - lines_per_page_safety):
