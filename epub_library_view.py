@@ -79,6 +79,8 @@ class LibraryApp(tk.Tk):
 
         style = ttk.Style()
         style.configure("Selected.TFrame", background="#d0ebff")
+        style.configure("Modal.TFrame", background="#eeeeee")
+        style.configure("ModalSelected.TFrame", background="#d0ebff")
 
         # Initialize encoder
         self.encoder = RotaryEncoder(clk_board=11, dt_board=16, sw_board=18)
@@ -86,6 +88,9 @@ class LibraryApp(tk.Tk):
 
         self.encoder.on_rotate = self._library_rotate
         self.encoder.on_button = self._library_button
+
+        # ---------- Bookmarks ----------
+        self.bookmarks = {}  # book path → (chapter_index, page_index)
 
         self.show_library()
 
@@ -171,15 +176,9 @@ class LibraryApp(tk.Tk):
         self.show_reader(epub_path)
 
     # ---------- Reader ----------
-       # ---------- Reader ----------
     def show_reader(self, epub_path):
         self.current_view = "reader"
         self.clear_container()
-
-        topbar = ttk.Frame(self.container)
-        topbar.pack(fill="x", padx=6, pady=6)
-        back_btn = ttk.Button(topbar, text="← Back to Library", command=self.show_library)
-        back_btn.pack(side="left")
 
         try:
             book = epub.read_epub(epub_path)
@@ -188,28 +187,100 @@ class LibraryApp(tk.Tk):
         except Exception:
             title_text = epub_path.stem
 
-        title_label = ttk.Label(topbar, text=title_text)
-        title_label.pack(side="left", padx=8)
-
         reader_frame = ReaderWindow(self.container, epub_path)
         reader_frame.pack(fill="both", expand=True)
 
-        # ---------- FIX: Rotary encoder callbacks with proper debounce ----------
-        self.encoder.on_rotate = lambda d: self.after(
-            0, reader_frame.next_page if d == "CLOCKWISE" else reader_frame.prev_page
-        )
+        title_label = ttk.Label(self.container, text=title_text, font=("TkDefaultFont", 14))
+        title_label.pack(side="top", pady=(4, 0))
 
-        def reader_back_button():
+        # ---------- Modal state ----------
+        self.modal_active = False
+        self.modal_index = 0
+        self.modal_options = ["Drop Bookmark", "Go to Bookmark", "Back to Library", "Cancel"]
+        self.modal_frame = None
+        self.modal_buttons = []
+        self.current_book_path = epub_path
+        self.current_reader = reader_frame
+
+        # ---------- Encoder callbacks ----------
+        def on_rotate(direction):
+            if self.modal_active:
+                if direction == "CLOCKWISE":
+                    self.modal_index = (self.modal_index + 1) % len(self.modal_options)
+                else:
+                    self.modal_index = (self.modal_index - 1) % len(self.modal_options)
+                self._update_modal_selection()
+            else:
+                if direction == "CLOCKWISE":
+                    reader_frame.next_page()
+                else:
+                    reader_frame.prev_page()
+
+        def on_button():
             now = time.time()
             if now - self._last_action_time < self._debounce_delay:
                 return
             self._last_action_time = now
-            self.show_library()
 
-        self.encoder.on_button = reader_back_button
-        # Prevent immediate bounce
+            if self.modal_active:
+                self._select_modal_option()
+            else:
+                self._open_modal()
+
+        self.encoder.on_rotate = on_rotate
+        self.encoder.on_button = on_button
         self._last_action_time = time.time() + self._debounce_delay
 
+    # ---------- Modal helpers ----------
+    def _open_modal(self):
+        if self.modal_active:
+            return
+        self.modal_active = True
+        self.modal_index = 0
+
+        self.modal_frame = ttk.Frame(self.container, style="Modal.TFrame", padding=10)
+        self.modal_frame.place(relx=0.5, rely=0.5, anchor="center")
+
+        self.modal_buttons = []
+        for i, opt in enumerate(self.modal_options):
+            b = ttk.Label(self.modal_frame, text=opt, padding=6, anchor="center")
+            b.pack(fill="x", pady=2)
+            self.modal_buttons.append(b)
+
+        self._update_modal_selection()
+
+    def _update_modal_selection(self):
+        for i, lbl in enumerate(self.modal_buttons):
+            if i == self.modal_index:
+                lbl.configure(background="#d0ebff")
+            else:
+                lbl.configure(background="#eeeeee")
+
+    def _select_modal_option(self):
+        option = self.modal_options[self.modal_index]
+        self.modal_frame.destroy()
+        self.modal_active = False
+
+        if option == "Back to Library":
+            self.show_library()
+        elif option == "Drop Bookmark":
+            # Save current chapter/page
+            chap = self.current_reader.current_chapter
+            page = self.current_reader.current_page
+            self.bookmarks[self.current_book_path] = (chap, page)
+            print(f"[DEBUG] Bookmark saved at chapter {chap}, page {page}")
+        elif option == "Go to Bookmark":
+            # Jump to saved bookmark if exists
+            bm = self.bookmarks.get(self.current_book_path)
+            if bm:
+                chap, page = bm
+                self.current_reader.load_chapter(chap)
+                self.current_reader.current_page = page
+                self.current_reader.display_page()
+                print(f"[DEBUG] Jumped to bookmark at chapter {chap}, page {page}")
+            else:
+                print("[DEBUG] No bookmark found for this book")
+        # Cancel does nothing
 
 if __name__ == "__main__":
     if not EBOOKS_DIR.exists():
