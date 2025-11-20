@@ -14,9 +14,7 @@ INLINE_BOLD = ("strong", "b")
 INLINE_ITALIC = ("em", "i")
 
 
-class ReaderWindow(tk.Frame):
-    """Paged EPUB reader with no rotary encoder management (handled by LibraryApp)."""
-    
+class ReaderWindow(tk.Frame):    
     def __init__(self, master, epub_path):
         super().__init__(master, bg="white", width=WINDOW_WIDTH, height=WINDOW_HEIGHT)
 
@@ -272,9 +270,18 @@ class ReaderWindow(tk.Frame):
     # ---------- HTML parsing ----------
     def insert_html_into_buffer(self, html_content):
         soup = BeautifulSoup(html_content, "html.parser")
+
+        # --- TOC detection ---
+        toc_nav = soup.find(lambda tag: (tag.name == "nav" and tag.get("epub:type") == "toc") or (tag.name == "div" and "toc" in tag.get("class", [])))
+        if toc_nav:
+            # If <nav epub:type="toc"> is inside a <div class="toc">, use the parent for heading
+            toc_container = toc_nav.find_parent("div", class_="toc") or toc_nav
+            self._insert_toc_block(toc_container)
+            return
+
+        # --- Normal block parsing ---
         blocks = soup.find_all(BLOCK_TAGS)
         filtered = []
-
         for b in blocks:
             if any((ancestor.name in BLOCK_TAGS) for ancestor in b.parents if isinstance(ancestor, Tag)):
                 parent = b.find_parent(BLOCK_TAGS)
@@ -294,6 +301,46 @@ class ReaderWindow(tk.Frame):
                 continue
             self.insert_inline(blk, into=self._buffer)
             self._buffer.insert("end", "\n")
+
+    def _insert_toc_block(self, toc_container):
+        """Render the entire Table of Contents as a single block, with heading and all items on one page."""
+        # Find heading (e.g., h1, .toc-title, etc.)
+        heading = None
+        if toc_container:
+            heading = toc_container.find("h1") or toc_container.find("div", class_="toc-title")
+        if heading:
+            self._insert_text_with_tags(heading.get_text(strip=True), ["h1"], self._buffer)
+            self._buffer.insert("end", "\n\n")
+
+        # Find the <nav> or <ol>/<ul> containing the ToC entries
+        nav = toc_container.find("nav") if toc_container else None
+        ol = nav.find("ol") if nav and nav.find("ol") else (toc_container.find("ol") if toc_container else None)
+        ul = nav.find("ul") if nav and nav.find("ul") else (toc_container.find("ul") if toc_container else None)
+        list_tag = ol or ul
+        if list_tag:
+            self._insert_toc_list(list_tag, indent=0)
+        else:
+            # fallback: just print all links in container
+            links = toc_container.find_all("a") if toc_container else []
+            for a in links:
+                self._insert_text_with_tags(a.get_text(strip=True), [], self._buffer)
+                self._buffer.insert("end", "\n")
+
+    def _insert_toc_list(self, list_tag, indent=0):
+        """Recursively render a <ol> or <ul> as a single block, with indentation for sublists."""
+        for li in list_tag.find_all("li", recursive=False):
+            # Find the link and text
+            link = li.find("a")
+            text = link.get_text(strip=True) if link else li.get_text(strip=True)
+            self._insert_text_with_tags(" " * (indent * 4) + text, [], self._buffer)
+            self._buffer.insert("end", "\n")
+            # Handle nested lists
+            sub_ol = li.find("ol", recursive=False)
+            sub_ul = li.find("ul", recursive=False)
+            if sub_ol:
+                self._insert_toc_list(sub_ol, indent=indent + 1)
+            elif sub_ul:
+                self._insert_toc_list(sub_ul, indent=indent + 1)
 
     def insert_inline(self, node, active_tags=None, into=None):
         if into is None:
