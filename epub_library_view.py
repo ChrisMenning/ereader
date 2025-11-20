@@ -5,6 +5,7 @@ from pathlib import Path
 from PIL import Image, ImageTk
 import io
 from formatted_reader_view import ReaderWindow
+from cbz_reader_view import CBZReaderWindow
 from rotary_encoder import RotaryEncoder
 import time
 
@@ -48,14 +49,40 @@ def get_epub_metadata(epub_path):
 
 
 def load_library():
+    import zipfile
     COVERS_DIR.mkdir(exist_ok=True)
     library = []
+    # EPUBs
     for epub_file in sorted(EBOOKS_DIR.glob("*.epub")):
         try:
             data = get_epub_metadata(epub_file)
+            data["type"] = "epub"
             library.append((epub_file, data))
         except Exception as e:
             print(f"Error reading {epub_file}: {e}")
+    # CBZs
+    for cbz_file in sorted(EBOOKS_DIR.glob("*.cbz")):
+        try:
+            with zipfile.ZipFile(cbz_file, 'r') as z:
+                image_files = sorted([f for f in z.namelist() if f.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp"))])
+                cover_image = None
+                if image_files:
+                    img_data = z.read(image_files[0])
+                    try:
+                        cover_image = Image.open(io.BytesIO(img_data))
+                    except Exception:
+                        cover_image = None
+                meta = {
+                    "title": cbz_file.stem,
+                    "author": "",
+                    "language": "",
+                    "cover_image": cover_image,
+                    "type": "cbz",
+                    "page_count": len(image_files),
+                }
+                library.append((cbz_file, meta))
+        except Exception as e:
+            print(f"Error reading {cbz_file}: {e}")
     return library
 
 
@@ -176,18 +203,34 @@ class LibraryApp(tk.Tk):
         self.show_reader(epub_path)
 
     # ---------- Reader ----------
-    def show_reader(self, epub_path):
+    def show_reader(self, book_path):
         self.current_view = "reader"
         self.clear_container()
 
-        try:
-            book = epub.read_epub(epub_path)
-            title_md = book.get_metadata("DC", "title")
-            title_text = title_md[0][0] if title_md else epub_path.stem
-        except Exception:
-            title_text = epub_path.stem
+        ext = str(book_path).lower()
+        is_cbz = ext.endswith(".cbz")
+        is_epub = ext.endswith(".epub")
 
-        reader_frame = ReaderWindow(self.container, epub_path)
+        if is_cbz:
+            title_text = book_path.stem
+            reader_frame = CBZReaderWindow(self.container, book_path)
+            reader_frame.pack(fill="both", expand=True)
+            title_label = ttk.Label(self.container, text=title_text, font=("TkDefaultFont", 14))
+            title_label.pack(side="top", pady=(4, 0))
+            # No bookmarks/modal for CBZ for now
+            self.current_book_path = book_path
+            self.current_reader = reader_frame
+            return
+
+        # EPUB fallback (default)
+        try:
+            book = epub.read_epub(book_path)
+            title_md = book.get_metadata("DC", "title")
+            title_text = title_md[0][0] if title_md else book_path.stem
+        except Exception:
+            title_text = book_path.stem
+
+        reader_frame = ReaderWindow(self.container, book_path)
         reader_frame.pack(fill="both", expand=True)
 
         title_label = ttk.Label(self.container, text=title_text, font=("TkDefaultFont", 14))
@@ -199,7 +242,7 @@ class LibraryApp(tk.Tk):
         self.modal_options = ["Drop Bookmark", "Go to Bookmark", "Back to Library", "Cancel"]
         self.modal_frame = None
         self.modal_buttons = []
-        self.current_book_path = epub_path
+        self.current_book_path = book_path
         self.current_reader = reader_frame
 
         # ---------- Encoder callbacks ----------
