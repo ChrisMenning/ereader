@@ -22,13 +22,9 @@ class ReaderWindow(tk.Frame):
         self.main_frame = tk.Frame(self, bg="white")
         self.main_frame.pack(fill="both", expand=True)
 
-        # Frame for text area
-        self.text_frame = tk.Frame(self.main_frame, bg="white")
-        self.text_frame.pack(side="top", fill="both", expand=True)
-
         # Footer frame (always visible at bottom)
         self.footer_frame = tk.Frame(self.main_frame, bg="white")
-        self.footer_frame.pack(side="bottom", fill="x")
+        self.footer_frame.place(relx=0, rely=1.0, relwidth=1.0, anchor="sw")
 
         # Chapter footer label
         self.page_label = tk.Label(self.footer_frame, text="", bg="white", fg="gray",
@@ -42,7 +38,7 @@ class ReaderWindow(tk.Frame):
 
         # Visible text area
         self.text_canvas = tk.Text(
-            self.text_frame,
+            self.main_frame,
             wrap="word",
             bg="white",
             bd=0,
@@ -51,7 +47,15 @@ class ReaderWindow(tk.Frame):
             spacing1=4,
             spacing3=6,
         )
-        self.text_canvas.pack(fill="both", expand=True, padx=0, pady=(0, 4))
+        # Set height after window is mapped
+        self.after(100, self._resize_text_canvas)
+
+    def _resize_text_canvas(self):
+        self.update_idletasks()
+        footer_height = self.footer_frame.winfo_height() or 40
+        total_height = self.main_frame.winfo_height() or WINDOW_HEIGHT
+        text_height = max(100, total_height - footer_height)
+        self.text_canvas.place(x=0, y=0, width=self.main_frame.winfo_width() or WINDOW_WIDTH, height=text_height)
 
         # Footer frame (always visible at bottom)
         self.footer_frame = tk.Frame(self.main_frame, bg="white")
@@ -183,8 +187,8 @@ class ReaderWindow(tk.Frame):
             pass
 
         # Reserve space for footer
-        footer_space = self.footer_frame.winfo_reqheight() + PAGE_MARGIN
-        canvas_height = self.text_frame.winfo_height()
+        footer_space = self.footer_frame.winfo_height() or 40
+        canvas_height = self.main_frame.winfo_height() or WINDOW_HEIGHT
         visible_height = max(1, canvas_height - 2 * PAGE_MARGIN - footer_space)
 
         pages = []
