@@ -192,9 +192,18 @@ class ReaderWindow(tk.Frame):
         canvas_height = self.main_frame.winfo_height() or WINDOW_HEIGHT
         visible_height = max(1, canvas_height - 2 * PAGE_MARGIN - footer_space)
 
+        # --- NEW: subtract 2 lines as a fudge factor ---
+        fudge_lines = 2
+        font_obj = self._fonts["base"]
+        line_height = int(font_obj.metrics("linespace")) if font_obj else FONT_SIZE_DEFAULT + 4
+        visible_height -= fudge_lines * line_height
+
+        bottom_margin = 4  # extra safety
+
         pages = []
         buf_end = self._buffer.index("end-1c")
         start_index = "1.0"
+
         if self._buffer.compare(start_index, ">=", buf_end):
             return [("1.0", "end")]
 
@@ -208,63 +217,42 @@ class ReaderWindow(tk.Frame):
                 return self._fonts.get("h3", self._fonts["base"]), 4, 4
             return self._fonts["base"], 0, 0
 
-        paragraph_spacing = 8  # You may want to tune this value
+        paragraph_spacing = 6
 
         while self._buffer.compare(start_index, "<", buf_end):
-            page_start_line = int(start_index.split(".")[0])
-            current_line = page_start_line
+            page_start = start_index
             used_pixels = 0
-            last_included_line = None
+            idx = start_index
 
             while True:
-                logical_index = f"{current_line}.0"
-                if self._buffer.compare(logical_index, ">=", buf_end):
-                    break
+                chunk_end = self._buffer.index(f"{idx} +50 chars")
+                if self._buffer.compare(chunk_end, ">", buf_end):
+                    chunk_end = buf_end
 
-                try:
-                    display_lines_raw = self._buffer.count(logical_index, f"{current_line}.end", "displaylines")[0]
-                    display_lines = int(display_lines_raw) if display_lines_raw is not None else 0
-                except Exception:
-                    display_lines = 0
-                display_lines = max(1, display_lines)
-
-                font_obj, spacing1, spacing3 = pick_font_for_index(logical_index)
+                display_lines = self._buffer.count(idx, chunk_end, "displaylines")[0] or 1
+                font_obj, spacing1, spacing3 = pick_font_for_index(idx)
                 try:
                     line_space = int(font_obj.metrics("linespace"))
                 except Exception:
-                    line_space = FONT_SIZE_DEFAULT + 6
+                    line_space = FONT_SIZE_DEFAULT + 4
 
-                line_text = self._buffer.get(logical_index, f"{current_line}.end")
-                added = display_lines * line_space
+                added_height = display_lines * line_space + spacing1 + spacing3
+                next_char = self._buffer.get(chunk_end, f"{chunk_end} +1c")
+                if next_char == "\n":
+                    added_height += paragraph_spacing
 
-                if last_included_line is None:
-                    added += spacing1
-                added += spacing3
-
-                # Add extra space for paragraph breaks
-                if line_text.endswith("\n"):
-                    added += paragraph_spacing
-
-                # Force break if paragraph is too long
-                if used_pixels + added > visible_height:
-                    if last_included_line is None:
-                        last_included_line = current_line
-                        current_line += 1
+                if used_pixels + added_height > visible_height - bottom_margin:
+                    if self._buffer.compare(idx, "==", page_start):
+                        idx = chunk_end
                     break
 
-                used_pixels += added
-                last_included_line = current_line
-                current_line += 1
-
-                if self._buffer.compare(f"{current_line}.0", ">=", buf_end):
+                used_pixels += added_height
+                idx = chunk_end
+                if self._buffer.compare(idx, ">=", buf_end):
                     break
 
-            if last_included_line is None:
-                last_included_line = page_start_line
-
-            page_end = f"{last_included_line}.end"
-            pages.append((f"{page_start_line}.0", page_end))
-            start_index = f"{last_included_line + 1}.0"
+            pages.append((page_start, idx))
+            start_index = idx
             if self._buffer.compare(start_index, ">=", buf_end):
                 break
 
