@@ -187,6 +187,7 @@ class ReaderWindow(tk.Frame):
         except Exception:
             pass
 
+        # Reserve space for footer
         footer_space = self.footer_frame.winfo_height() or 40
         canvas_height = self.main_frame.winfo_height() or WINDOW_HEIGHT
         visible_height = max(1, canvas_height - 2 * PAGE_MARGIN - footer_space)
@@ -207,51 +208,63 @@ class ReaderWindow(tk.Frame):
                 return self._fonts.get("h3", self._fonts["base"]), 4, 4
             return self._fonts["base"], 0, 0
 
-        paragraph_spacing = 8
+        paragraph_spacing = 8  # You may want to tune this value
 
         while self._buffer.compare(start_index, "<", buf_end):
-            page_start_index = start_index
+            page_start_line = int(start_index.split(".")[0])
+            current_line = page_start_line
             used_pixels = 0
-            last_index = start_index
+            last_included_line = None
 
             while True:
-                # Get the end of the current logical line
-                line_end = self._buffer.index(f"{last_index} lineend")
-                line_text = self._buffer.get(last_index, line_end)
-                font_obj, spacing1, spacing3 = pick_font_for_index(last_index)
+                logical_index = f"{current_line}.0"
+                if self._buffer.compare(logical_index, ">=", buf_end):
+                    break
+
+                try:
+                    display_lines_raw = self._buffer.count(logical_index, f"{current_line}.end", "displaylines")[0]
+                    display_lines = int(display_lines_raw) if display_lines_raw is not None else 0
+                except Exception:
+                    display_lines = 0
+                display_lines = max(1, display_lines)
+
+                font_obj, spacing1, spacing3 = pick_font_for_index(logical_index)
                 try:
                     line_space = int(font_obj.metrics("linespace"))
                 except Exception:
                     line_space = FONT_SIZE_DEFAULT + 6
 
-                # Count display lines (wrapped lines)
-                try:
-                    display_lines = self._buffer.count(last_index, line_end, "displaylines")[0]
-                except Exception:
-                    display_lines = 1
-                display_lines = max(1, display_lines)
+                line_text = self._buffer.get(logical_index, f"{current_line}.end")
+                added = display_lines * line_space
 
-                # Add space for each display line
-                added = display_lines * line_space + spacing3
-                if last_index == page_start_index:
+                if last_included_line is None:
                     added += spacing1
+                added += spacing3
 
-                # If this is the end of a paragraph, add paragraph spacing
+                # Add extra space for paragraph breaks
                 if line_text.endswith("\n"):
                     added += paragraph_spacing
 
+                # Force break if paragraph is too long
                 if used_pixels + added > visible_height:
-                    # If even one display line doesn't fit, break here
+                    if last_included_line is None:
+                        last_included_line = current_line
+                        current_line += 1
                     break
 
                 used_pixels += added
-                last_index = self._buffer.index(f"{last_index} +1line")
-                if self._buffer.compare(last_index, ">=", buf_end):
+                last_included_line = current_line
+                current_line += 1
+
+                if self._buffer.compare(f"{current_line}.0", ">=", buf_end):
                     break
 
-            page_end = self._buffer.index(f"{last_index} -1c")
-            pages.append((page_start_index, page_end))
-            start_index = last_index
+            if last_included_line is None:
+                last_included_line = page_start_line
+
+            page_end = f"{last_included_line}.end"
+            pages.append((f"{page_start_line}.0", page_end))
+            start_index = f"{last_included_line + 1}.0"
             if self._buffer.compare(start_index, ">=", buf_end):
                 break
 
