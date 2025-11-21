@@ -18,9 +18,13 @@ class ReaderWindow(tk.Frame):
     def __init__(self, master, epub_path):
         super().__init__(master, bg="white", width=WINDOW_WIDTH, height=WINDOW_HEIGHT)
 
+        # Layout: vertical stack (text area above, footer below)
+        self.main_frame = tk.Frame(self, bg="white")
+        self.main_frame.pack(fill="both", expand=True)
+
         # Visible text area
         self.text_canvas = tk.Text(
-            self,
+            self.main_frame,
             wrap="word",
             bg="white",
             bd=0,
@@ -44,7 +48,7 @@ class ReaderWindow(tk.Frame):
         self.page_number_overlay.place(relx=1.0, rely=1.0, x=-PAGE_MARGIN, y=-PAGE_MARGIN, anchor="se")
 
         # Chapter footer
-        self.page_label = tk.Label(self, text="", bg="white", fg="gray",
+        self.page_label = tk.Label(self.main_frame, text="", bg="white", fg="gray",
                                    font=(FONT_FAMILY_DEFAULT, 10))
         self.page_label.pack(side="bottom", pady=(0, 8))
 
