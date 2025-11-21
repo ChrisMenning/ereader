@@ -22,9 +22,13 @@ class ReaderWindow(tk.Frame):
         self.main_frame = tk.Frame(self, bg="white")
         self.main_frame.pack(fill="both", expand=True)
 
+        # Frame for text area
+        self.text_frame = tk.Frame(self.main_frame, bg="white")
+        self.text_frame.pack(side="top", fill="both", expand=True)
+
         # Visible text area
         self.text_canvas = tk.Text(
-            self.main_frame,
+            self.text_frame,
             wrap="word",
             bg="white",
             bd=0,
@@ -33,7 +37,7 @@ class ReaderWindow(tk.Frame):
             spacing1=4,
             spacing3=6,
         )
-        self.text_canvas.pack(side="top", fill="both", expand=True, padx=0, pady=(0, 4))
+        self.text_canvas.pack(fill="both", expand=True, padx=0, pady=(0, 4))
 
         # Overlay page number
         self.page_number_overlay = tk.Label(
@@ -50,7 +54,7 @@ class ReaderWindow(tk.Frame):
         # Chapter footer
         self.page_label = tk.Label(self.main_frame, text="", bg="white", fg="gray",
                                    font=(FONT_FAMILY_DEFAULT, 10))
-        self.page_label.pack(side="bottom", pady=(0, 8))
+        self.page_label.pack(side="bottom", fill="x", pady=(0, 8))
 
         # Persistent hidden buffer for measuring layout
         self._buffer = tk.Text(self, wrap="word", bg="white")
