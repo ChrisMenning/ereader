@@ -39,22 +39,19 @@ class ReaderWindow(tk.Frame):
         )
         self.text_canvas.pack(fill="both", expand=True, padx=0, pady=(0, 4))
 
-        # Overlay page number
-        self.page_number_overlay = tk.Label(
-            self.text_canvas,
-            text="",
-            bg="white",
-            fg="#999999",
-            font=(FONT_FAMILY_DEFAULT, 10),
-            anchor="se",
-            justify="right"
-        )
-        self.page_number_overlay.place(relx=1.0, rely=1.0, x=-PAGE_MARGIN, y=-PAGE_MARGIN, anchor="se")
+        # Footer frame (always visible at bottom)
+        self.footer_frame = tk.Frame(self.main_frame, bg="white")
+        self.footer_frame.pack(side="bottom", fill="x")
 
-        # Chapter footer
-        self.page_label = tk.Label(self.main_frame, text="", bg="white", fg="gray",
-                                   font=(FONT_FAMILY_DEFAULT, 10))
-        self.page_label.pack(side="bottom", fill="x", pady=(0, 8))
+        # Chapter footer label
+        self.page_label = tk.Label(self.footer_frame, text="", bg="white", fg="gray",
+                                   font=(FONT_FAMILY_DEFAULT, 10), anchor="w")
+        self.page_label.pack(side="left", padx=(PAGE_MARGIN, 0), pady=(0, 8))
+
+        # Page number label (footer)
+        self.page_number_footer = tk.Label(self.footer_frame, text="", bg="white", fg="#999999",
+                                          font=(FONT_FAMILY_DEFAULT, 10), anchor="e")
+        self.page_number_footer.pack(side="right", padx=(0, PAGE_MARGIN), pady=(0, 8))
 
         # Persistent hidden buffer for measuring layout
         self._buffer = tk.Text(self, wrap="word", bg="white")
@@ -294,7 +291,8 @@ class ReaderWindow(tk.Frame):
                     pass
 
         self.text_canvas.config(state="disabled")
-        self.page_number_overlay.config(text=f"{self.current_page + 1} / {len(self.pages)}")
+        # Remove overlay page number, update footer
+        self.page_number_footer.config(text=f"{self.current_page + 1} / {len(self.pages)}")
         self.page_label.config(text=f"Chapter {self.current_chapter + 1} of {len(self.spine_items)}")
 
     # ---------- Navigation ----------
