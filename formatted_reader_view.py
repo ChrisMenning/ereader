@@ -192,10 +192,10 @@ class ReaderWindow(tk.Frame):
         canvas_height = self.main_frame.winfo_height() or WINDOW_HEIGHT
         visible_height = max(1, canvas_height - 2 * PAGE_MARGIN - footer_space)
 
-        # --- NEW: subtract 2 lines as a fudge factor ---
+        # Fudge factor: assume 2 fewer lines than actual
         fudge_lines = 2
-        font_obj = self._fonts["base"]
-        line_height = int(font_obj.metrics("linespace")) if font_obj else FONT_SIZE_DEFAULT + 4
+        base_font = self._fonts["base"]
+        line_height = int(base_font.metrics("linespace"))
         visible_height -= fudge_lines * line_height
 
         bottom_margin = 4  # extra safety
@@ -217,7 +217,7 @@ class ReaderWindow(tk.Frame):
                 return self._fonts.get("h3", self._fonts["base"]), 4, 4
             return self._fonts["base"], 0, 0
 
-        paragraph_spacing = 6
+        paragraph_spacing = line_height  # treat every paragraph break as at least one line
 
         while self._buffer.compare(start_index, "<", buf_end):
             page_start = start_index
@@ -237,12 +237,16 @@ class ReaderWindow(tk.Frame):
                     line_space = FONT_SIZE_DEFAULT + 4
 
                 added_height = display_lines * line_space + spacing1 + spacing3
-                next_char = self._buffer.get(chunk_end, f"{chunk_end} +1c")
-                if next_char == "\n":
-                    added_height += paragraph_spacing
 
+                # --- NEW: Add paragraph spacing for any newline in this chunk ---
+                chunk_text = self._buffer.get(idx, chunk_end)
+                newline_count = chunk_text.count("\n")
+                added_height += newline_count * paragraph_spacing
+
+                # Stop if this chunk would overflow
                 if used_pixels + added_height > visible_height - bottom_margin:
                     if self._buffer.compare(idx, "==", page_start):
+                        # very tall single chunk: still include
                         idx = chunk_end
                     break
 
