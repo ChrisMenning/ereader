@@ -208,6 +208,8 @@ class ReaderWindow(tk.Frame):
                 return self._fonts.get("h3", self._fonts["base"]), 4, 4
             return self._fonts["base"], 0, 0
 
+        paragraph_spacing = 8  # You may want to tune this value
+
         while self._buffer.compare(start_index, "<", buf_end):
             page_start_line = int(start_index.split(".")[0])
             current_line = page_start_line
@@ -232,16 +234,18 @@ class ReaderWindow(tk.Frame):
                 except Exception:
                     line_space = FONT_SIZE_DEFAULT + 6
 
-                line_text = self._buffer.get(logical_index, f"{current_line}.end").strip()
-                if not line_text:
-                    added = line_space
-                else:
-                    added = display_lines * line_space
+                line_text = self._buffer.get(logical_index, f"{current_line}.end")
+                added = display_lines * line_space
 
                 if last_included_line is None:
                     added += spacing1
                 added += spacing3
 
+                # Add extra space for paragraph breaks
+                if line_text.endswith("\n"):
+                    added += paragraph_spacing
+
+                # Force break if paragraph is too long
                 if used_pixels + added > visible_height:
                     if last_included_line is None:
                         last_included_line = current_line
