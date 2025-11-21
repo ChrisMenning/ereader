@@ -26,6 +26,20 @@ class ReaderWindow(tk.Frame):
         self.text_frame = tk.Frame(self.main_frame, bg="white")
         self.text_frame.pack(side="top", fill="both", expand=True)
 
+        # Footer frame (always visible at bottom)
+        self.footer_frame = tk.Frame(self.main_frame, bg="white")
+        self.footer_frame.pack(side="bottom", fill="x")
+
+        # Chapter footer label
+        self.page_label = tk.Label(self.footer_frame, text="", bg="white", fg="gray",
+                                   font=(FONT_FAMILY_DEFAULT, 10), anchor="w")
+        self.page_label.pack(side="left", padx=(PAGE_MARGIN, 0), pady=(0, 8))
+
+        # Page number label (footer)
+        self.page_number_footer = tk.Label(self.footer_frame, text="", bg="white", fg="#999999",
+                                          font=(FONT_FAMILY_DEFAULT, 10), anchor="e")
+        self.page_number_footer.pack(side="right", padx=(0, PAGE_MARGIN), pady=(0, 8))
+
         # Visible text area
         self.text_canvas = tk.Text(
             self.text_frame,
@@ -161,10 +175,6 @@ class ReaderWindow(tk.Frame):
 
     # ---------- Pagination ----------
     def _build_pages(self):
-        # Debug: report measured sizes
-        print("canvas height:", self.text_canvas.winfo_height(), "buffer height:", self._buffer.winfo_height())
-
-        # Ensure buffer geometry is up-to-date (must be mapped and sized for displaylines to be correct)
         self.update_idletasks()
         try:
             self._buffer.update_idletasks()
@@ -172,8 +182,10 @@ class ReaderWindow(tk.Frame):
         except Exception:
             pass
 
-        footer_space = self.page_label.winfo_reqheight() + PAGE_MARGIN
-        visible_height = max(1, self.text_canvas.winfo_height() - 2 * PAGE_MARGIN - footer_space)
+        # Reserve space for footer
+        footer_space = self.footer_frame.winfo_reqheight() + PAGE_MARGIN
+        canvas_height = self.text_frame.winfo_height()
+        visible_height = max(1, canvas_height - 2 * PAGE_MARGIN - footer_space)
 
         pages = []
         buf_end = self._buffer.index("end-1c")
@@ -221,13 +233,9 @@ class ReaderWindow(tk.Frame):
                 else:
                     added = display_lines * line_space
 
-                # spacing1 at start of a block
                 if last_included_line is None:
                     added += spacing1
-
-                # spacing3 at end of a block (only once)
                 added += spacing3
-
 
                 if used_pixels + added > visible_height:
                     if last_included_line is None:
