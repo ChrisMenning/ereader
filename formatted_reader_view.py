@@ -17,6 +17,7 @@ INLINE_ITALIC = ("em", "i")
 class ReaderWindow(tk.Frame):    
     def __init__(self, master, epub_path):
         super().__init__(master, bg="white", width=WINDOW_WIDTH, height=WINDOW_HEIGHT)
+        self.epub_path = epub_path
 
         # Layout: vertical stack (text area above, footer below)
         self.main_frame = tk.Frame(self, bg="white")
