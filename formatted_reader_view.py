@@ -80,7 +80,7 @@ class ReaderWindow(tk.Frame):
         self._buffer.place(x=-10000, y=-10000, width=WINDOW_WIDTH - 2 * PAGE_MARGIN)
 
         # Load EPUB
-        self.book = epub.read_epub(epub_path)
+        self.book = epub.read_epub(self.epub_path)
         self.spine_items = [item for item in self.book.get_items() if isinstance(item, epub.EpubHtml)]
         if not self.spine_items:
             self.spine_items = [item for item in self.book.get_items()]
