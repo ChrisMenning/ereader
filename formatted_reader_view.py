@@ -6,7 +6,7 @@ import time
 
 WINDOW_WIDTH, WINDOW_HEIGHT = 800, 480
 FONT_SIZE_DEFAULT = 14
-FONT_FAMILY_DEFAULT = "DejaVuSans"
+FONT_FAMILY_DEFAULT = "LiberationSerif"
 PAGE_MARGIN = 16  # padding around text edges
 
 BLOCK_TAGS = ("p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "pre", "div")
@@ -74,6 +74,10 @@ class ReaderWindow(tk.Frame):
         self.bind_all("<Left>", lambda e: self.prev_page())
         self.text_canvas.focus_set()
 
+        self.text_canvas.configure(font=(FONT_FAMILY_DEFAULT, FONT_SIZE_DEFAULT))
+        self._buffer.configure(font=(FONT_FAMILY_DEFAULT, FONT_SIZE_DEFAULT))
+
+
     # ---------- Tag setup ----------
     def define_tags(self, on_widget=None):
         w = on_widget or self.text_canvas
@@ -122,22 +126,48 @@ class ReaderWindow(tk.Frame):
             self._finish_paging(index)
 
     def _finish_paging(self, index):
+        # Ensure buffer has same width and height as the visible text area while we measure
         visible_w = self.text_canvas.winfo_width() or (WINDOW_WIDTH - 2 * PAGE_MARGIN)
-        self._buffer.place_configure(width=visible_w)
-        self.pages = self._build_pages()
-        self.current_chapter = index
-        self.current_page = 0
-        self.display_page()
+        visible_h = self.text_canvas.winfo_height() or (WINDOW_HEIGHT - 2 * PAGE_MARGIN)
 
-    # ---------- Pagination ----------
-    def _build_pages(self):
+        # Temporarily place the buffer in the same space as the canvas so wrapping/count is accurate.
+        # We'll hide it again after paging.
+        self._buffer.place_configure(x=self.text_canvas.winfo_x(),
+                                    y=self.text_canvas.winfo_y(),
+                                    width=visible_w,
+                                    height=visible_h)
+        # Force geometry/layout to be computed
         self.update_idletasks()
         try:
             self._buffer.update_idletasks()
         except Exception:
             pass
 
-        footer_space = 34
+        # Now build pages reliably
+        self.pages = self._build_pages()
+
+        # Hide buffer again (move off-screen to keep it out of view)
+        self._buffer.place_configure(x=-10000, y=-10000)
+
+        self.current_chapter = index
+        self.current_page = 0
+        self.display_page()
+
+
+    # ---------- Pagination ----------
+    def _build_pages(self):
+        # Debug: report measured sizes
+        print("canvas height:", self.text_canvas.winfo_height(), "buffer height:", self._buffer.winfo_height())
+
+        # Ensure buffer geometry is up-to-date (must be mapped and sized for displaylines to be correct)
+        self.update_idletasks()
+        try:
+            self._buffer.update_idletasks()
+            self._buffer.update()
+        except Exception:
+            pass
+
+        footer_space = self.page_label.winfo_reqheight() + PAGE_MARGIN
         visible_height = max(1, self.text_canvas.winfo_height() - 2 * PAGE_MARGIN - footer_space)
 
         pages = []
@@ -181,9 +211,18 @@ class ReaderWindow(tk.Frame):
                     line_space = FONT_SIZE_DEFAULT + 6
 
                 line_text = self._buffer.get(logical_index, f"{current_line}.end").strip()
-                added = line_space if not line_text else display_lines * line_space + spacing3
-                if last_included_line is None and spacing1:
+                if not line_text:
+                    added = line_space
+                else:
+                    added = display_lines * line_space
+
+                # spacing1 at start of a block
+                if last_included_line is None:
                     added += spacing1
+
+                # spacing3 at end of a block (only once)
+                added += spacing3
+
 
                 if used_pixels + added > visible_height:
                     if last_included_line is None:
