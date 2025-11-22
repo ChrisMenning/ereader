@@ -55,58 +55,22 @@ class ReaderWindow(tk.Frame):
             spacing1=4,
             spacing3=6,
         )
-
-        # Display backend (will be set after widgets are laid out)
-        self.display = None
-
-        # Set height after window is mapped
-        self.after(100, self._resize_text_canvas)
-
-    def _resize_text_canvas(self):
-        # Ensure geometry is computed
-        self.update_idletasks()
-        footer_height = self.footer_frame.winfo_height() or 40
-        total_height = self.main_frame.winfo_height() or WINDOW_HEIGHT
-        text_height = max(100, total_height - footer_height)
-        self.text_canvas.place(x=0, y=0, width=self.main_frame.winfo_width() or WINDOW_WIDTH, height=text_height)
-
-        # Recreate footer widgets (keeps original behavior)
-        # Destroy and rebuild footer to ensure consistent layout when resizing
-        try:
-            # remove old footer children
-            for c in self.footer_frame.winfo_children():
-                c.destroy()
-        except Exception:
-            pass
-
-        self.footer_frame = tk.Frame(self.main_frame, bg="white")
-        self.footer_frame.pack(side="bottom", fill="x")
-
-        # Chapter footer label
-        self.page_label = tk.Label(self.footer_frame, text="", bg="white", fg="gray",
-                                   font=(FONT_FAMILY_DEFAULT, 10), anchor="w")
-        self.page_label.pack(side="left", padx=(PAGE_MARGIN, 0), pady=(0, 8))
-
-        # Page number label (footer)
-        self.page_number_footer = tk.Label(self.footer_frame, text="", bg="white", fg="#999999",
-                                          font=(FONT_FAMILY_DEFAULT, 10), anchor="e")
-        self.page_number_footer.pack(side="right", padx=(0, PAGE_MARGIN), pady=(0, 8))
+        self.text_canvas.place(x=0, y=0, width=WINDOW_WIDTH, height=WINDOW_HEIGHT-50)
 
         # Persistent hidden buffer for measuring layout
         self._buffer = tk.Text(self, wrap="word", bg="white")
         self._buffer.configure(padx=PAGE_MARGIN, pady=PAGE_MARGIN)
         self.define_tags(on_widget=self._buffer)
-        self.define_tags(on_widget=self.text_canvas)
-        self._buffer.place(x=-10000, y=-10000, width=WINDOW_WIDTH - 2 * PAGE_MARGIN)
+        self._buffer.place(x=-10000, y=-10000, width=WINDOW_WIDTH - 2 * PAGE_MARGIN, height=WINDOW_HEIGHT)
+        self._buffer.config(state="normal")  # Keep editable for pagination
 
-        # Initialize display backend (TkDisplay) with current widget refs
+        # Display backend (will be set after widgets are laid out)
         self.display = TkDisplay(self.text_canvas, self.page_label, self.page_number_footer)
 
         # Load EPUB
         try:
             self.book = epub.read_epub(self.epub_path)
         except Exception as e:
-            # If reading fails, create a minimal placeholder book object
             print(f"Error opening EPUB {self.epub_path}: {e}")
             self.book = None
 
@@ -122,19 +86,21 @@ class ReaderWindow(tk.Frame):
         self.pages = []
         self.current_page = 0
 
-        # Load first chapter
-        self.after(0, lambda: self.load_chapter(self.current_chapter))
+        # Load first chapter safely
+        self.after(100, lambda: self._safe_load_chapter(self.current_chapter))
 
         # Keyboard fallback
         self.bind_all("<Right>", lambda e: self.next_page())
         self.bind_all("<Left>", lambda e: self.prev_page())
-        try:
-            self.text_canvas.focus_set()
-        except Exception:
-            pass
 
         self.text_canvas.configure(font=(FONT_FAMILY_DEFAULT, FONT_SIZE_DEFAULT))
         self._buffer.configure(font=(FONT_FAMILY_DEFAULT, FONT_SIZE_DEFAULT))
+
+    # ---------- Safe chapter load ----------
+    def _safe_load_chapter(self, index):
+        if not hasattr(self, "_buffer") or not self._buffer.winfo_exists():
+            return
+        self.load_chapter(index)
 
     # ---------- Tag setup ----------
     def define_tags(self, on_widget=None):
@@ -170,277 +136,36 @@ class ReaderWindow(tk.Frame):
             html = "<p>[Could not load content]</p>"
 
         # Reset buffer
-        if self._buffer.winfo_exists():
-            self._buffer.config(state="normal")
-            self._buffer.delete("1.0", tk.END)
+        self._buffer.config(state="normal")
+        self._buffer.delete("1.0", tk.END)
         self.insert_html_into_buffer(html)
-        if self._buffer.winfo_exists():
-            self._buffer.config(state="disabled")
+        self._buffer.config(state="disabled")
 
         self.update_idletasks()
+        # Finish paging once geometry is ready
         if self.text_canvas.winfo_height() < 10:
             self.after(50, lambda: self._finish_paging(index))
         else:
             self._finish_paging(index)
 
+    # ---------- Pagination ----------
     def _finish_paging(self, index):
-        # Ensure buffer has same width and height as the visible text area while we measure
         visible_w = self.text_canvas.winfo_width() or (WINDOW_WIDTH - 2 * PAGE_MARGIN)
         visible_h = self.text_canvas.winfo_height() or (WINDOW_HEIGHT - 2 * PAGE_MARGIN)
 
-        # Temporarily place the buffer in the same space as the canvas so wrapping/count is accurate.
-        # We'll hide it again after paging.
         self._buffer.place_configure(x=self.text_canvas.winfo_x(),
                                     y=self.text_canvas.winfo_y(),
                                     width=visible_w,
                                     height=visible_h)
-        # Force geometry/layout to be computed
         self.update_idletasks()
-        try:
-            self._buffer.update_idletasks()
-        except Exception:
-            pass
+        self._buffer.update_idletasks()
 
-        # Now build pages reliably
         self.pages = self._build_pages()
 
-        # Hide buffer again (move off-screen to keep it out of view)
         self._buffer.place_configure(x=-10000, y=-10000)
-
         self.current_chapter = index
         self.current_page = 0
         self.display_page()
-
-
-    # ---------- Pagination ----------
-    def _build_pages(self):
-        import re
-
-        self.update_idletasks()
-        try:
-            self._buffer.update_idletasks()
-            self._buffer.update()
-        except Exception:
-            pass
-
-        # Reserve space for footer
-        footer_space = self.footer_frame.winfo_height() or 40
-        canvas_height = self.main_frame.winfo_height() or WINDOW_HEIGHT
-        visible_height = max(1, canvas_height - 2 * PAGE_MARGIN - footer_space)
-
-        # Fudge factor: assume 2 fewer lines than actual
-        fudge_lines = 0
-        base_font = self._fonts["base"]
-        line_height = int(base_font.metrics("linespace"))
-        visible_height -= fudge_lines * line_height
-
-        bottom_margin = 4  # extra safety
-
-        pages = []
-        buf_end = self._buffer.index("end-1c")
-        start_index = "1.0"
-
-        if self._buffer.compare(start_index, ">=", buf_end):
-            return [("1.0", "end")]
-
-        def pick_font_for_index(idx):
-            tags = self._buffer.tag_names(idx)
-            if "h1" in tags:
-                return self._fonts.get("h1", self._fonts["base"]), 8, 8
-            if "h2" in tags:
-                return self._fonts.get("h2", self._fonts["base"]), 6, 6
-            if "h3" in tags:
-                return self._fonts.get("h3", self._fonts["base"]), 4, 4
-            return self._fonts["base"], 0, 0
-
-        paragraph_spacing = line_height  # treat every paragraph break as at least one line
-
-        def measure_height(start_idx, end_idx):
-            """Return pixel height estimate for text between start_idx and end_idx."""
-            try:
-                raw_count = self._buffer.count(start_idx, end_idx, "displaylines")
-            except Exception:
-                raw_count = None
-            display_lines = (raw_count[0] if raw_count else 1) or 1
-
-            font_obj, spacing1, spacing3 = pick_font_for_index(start_idx)
-            try:
-                line_space = int(font_obj.metrics("linespace"))
-            except Exception:
-                line_space = FONT_SIZE_DEFAULT + 4
-
-            # Count explicit newlines and add paragraph spacing
-            try:
-                chunk_text = self._buffer.get(start_idx, end_idx)
-            except Exception:
-                chunk_text = ""
-            newline_count = chunk_text.count("\n")
-            added_height = display_lines * line_space + spacing1 + spacing3 + newline_count * paragraph_spacing
-            return added_height
-
-        # Helper to align a candidate end index to a safe word boundary (if reasonable).
-        def align_to_word(start_idx, candidate_idx):
-            if self._buffer.compare(candidate_idx, ">=", buf_end):
-                return buf_end
-            try:
-                txt = self._buffer.get(start_idx, candidate_idx)
-            except Exception:
-                return candidate_idx
-            # If the last char is whitespace, it's already aligned
-            if not txt:
-                return candidate_idx
-            if txt[-1].isspace():
-                return candidate_idx
-            # Find last whitespace in the chunk; keep at least 1 char if no whitespace found.
-            m = re.search(r'\s+\S*$', txt)
-            if m:
-                cutoff = m.start()
-                # if cutoff==0, that means first char(s) is whitespace, allow it
-                if cutoff <= 0:
-                    return candidate_idx
-                try:
-                    return self._buffer.index(f"{start_idx} +{cutoff} chars")
-                except Exception:
-                    return candidate_idx
-            # No whitespace found — return the raw candidate (will be handled to avoid infinite loops)
-            return candidate_idx
-
-        while self._buffer.compare(start_index, "<", buf_end):
-            page_start = start_index
-            used_pixels = 0
-            idx = start_index
-
-            # We'll search for the largest chunk starting at idx that fits the visible box.
-            # Exponential growth to find an upper bound, then binary search between last-good and upper bound.
-            # Start with a small step (50 chars) to avoid overshoot on narrow lines.
-            step = 50
-            last_good_end = idx
-            upper_end = None
-
-            # If the very first small chunk already overflows, we'll still include at least one chunk to avoid infinite loop.
-            while True:
-                try:
-                    raw_candidate = self._buffer.index(f"{idx} +{step} chars")
-                except Exception:
-                    raw_candidate = buf_end
-                # clamp
-                if self._buffer.compare(raw_candidate, ">", buf_end):
-                    raw_candidate = buf_end
-
-                candidate = align_to_word(idx, raw_candidate)
-
-                # Ensure candidate actually moves forward; if not, fall back to raw_candidate, then force 1 char
-                if self._buffer.compare(candidate, "<=", idx):
-                    # try raw_candidate (maybe it was buf_end)
-                    candidate = raw_candidate
-                    if self._buffer.compare(candidate, "<=", idx):
-                        # Force small advance of one char to prevent infinite loops
-                        try:
-                            candidate = self._buffer.index(f"{idx} +1 chars")
-                        except Exception:
-                            candidate = buf_end
-
-                h = measure_height(idx, candidate)
-                if h > visible_height - bottom_margin:
-                    # candidate does not fit; upper bound found
-                    upper_end = candidate
-                    break
-                else:
-                    last_good_end = candidate
-                    # If we reached end of buffer, stop
-                    if self._buffer.compare(candidate, ">=", buf_end):
-                        upper_end = candidate
-                        break
-                    # Grow step and continue
-                    step = step * 2
-
-            # If nothing fit (last_good_end == idx), we must include at least something: use upper_end
-            if self._buffer.compare(last_good_end, "==", idx):
-                # include at least up to upper_end (even if it overflows)
-                chosen_end = upper_end
-            elif self._buffer.compare(last_good_end, ">=", upper_end if upper_end is not None else buf_end):
-                chosen_end = last_good_end
-            else:
-                # Binary search between last_good_end and upper_end to find the largest fitting chunk
-                # Convert to char counts relative to idx
-                try:
-                    low_count = len(self._buffer.get(idx, last_good_end))
-                    high_count = len(self._buffer.get(idx, upper_end))
-                except Exception:
-                    # Fallback: use the last_good_end if anything goes wrong
-                    chosen_end = last_good_end
-                else:
-                    low = low_count
-                    high = high_count
-                    best = low
-                    while low <= high:
-                        mid = (low + high) // 2
-                        try:
-                            mid_end = self._buffer.index(f"{idx} +{mid} chars")
-                        except Exception:
-                            mid_end = upper_end
-                        if self._buffer.compare(mid_end, ">", buf_end):
-                            mid_end = buf_end
-                        aligned_mid_end = align_to_word(idx, mid_end)
-                        # Ensure progress
-                        if self._buffer.compare(aligned_mid_end, "<=", idx):
-                            aligned_mid_end = mid_end
-                            if self._buffer.compare(aligned_mid_end, "<=", idx):
-                                try:
-                                    aligned_mid_end = self._buffer.index(f"{idx} +1 chars")
-                                except Exception:
-                                    aligned_mid_end = buf_end
-
-                        hmid = measure_height(idx, aligned_mid_end)
-                        if hmid <= visible_height - bottom_margin:
-                            best = max(best, mid)
-                            low = mid + 1
-                        else:
-                            high = mid - 1
-
-                    # final chosen_end based on best
-                    try:
-                        chosen_end = self._buffer.index(f"{idx} +{best} chars")
-                    except Exception:
-                        chosen_end = last_good_end
-                    if self._buffer.compare(chosen_end, ">", buf_end):
-                        chosen_end = buf_end
-                    chosen_end = align_to_word(idx, chosen_end)
-
-                    # Ensure we advance; otherwise fallback
-                    if self._buffer.compare(chosen_end, "<=", idx):
-                        chosen_end = last_good_end
-
-            # Compute height and decide whether to accept; if it still doesn't fit but it's the only thing,
-            # accept it to make progress.
-            added_height = measure_height(idx, chosen_end)
-
-            if used_pixels + added_height > visible_height - bottom_margin and self._buffer.compare(idx, "==", page_start):
-                # extremely tall single chunk - include it to avoid infinite loop
-                idx = chosen_end
-            elif used_pixels + added_height > visible_height - bottom_margin:
-                # wouldn't fit, finish the page
-                pass
-            else:
-                used_pixels += added_height
-                idx = chosen_end
-
-            # If idx didn't advance for any reason, force at least one char forward to avoid infinite loop.
-            if self._buffer.compare(idx, "<=", page_start):
-                try:
-                    idx = self._buffer.index(f"{page_start} +1 chars")
-                except Exception:
-                    idx = buf_end
-
-            pages.append((page_start, idx))
-            start_index = idx
-            if self._buffer.compare(start_index, ">=", buf_end):
-                break
-
-        if not pages:
-            pages = [("1.0", "end")]
-        return pages
-
 
     # ---------- Page display ----------
     def display_page(self):
@@ -449,54 +174,9 @@ class ReaderWindow(tk.Frame):
 
         self.current_page = max(0, min(self.current_page, len(self.pages) - 1))
         start, end = self.pages[self.current_page]
-
         page_text = self._buffer.get(start, end)
 
-        # If no display backend is present, fall back to original direct manipulation
-        if not self.display:
-            try:
-                self.text_canvas.config(state="normal")
-                self.text_canvas.delete("1.0", tk.END)
-                self.text_canvas.insert("1.0", page_text)
-
-                # Copy formatting
-                for tag in self._buffer.tag_names():
-                    if tag.startswith("sel"):
-                        continue
-                    ranges = self._buffer.tag_ranges(tag)
-                    for i in range(0, len(ranges), 2):
-                        rstart, rend = ranges[i], ranges[i + 1]
-                        if self._buffer.compare(rend, "<=", start) or self._buffer.compare(rstart, ">=", end):
-                            continue
-                        overlap_start = rstart if self._buffer.compare(rstart, ">", start) else start
-                        overlap_end = rend if self._buffer.compare(rend, "<", end) else end
-                        n_before = len(self._buffer.get(start, overlap_start))
-                        n_len = len(self._buffer.get(overlap_start, overlap_end))
-                        if n_len <= 0:
-                            continue
-                        vis_start = f"1.0 + {n_before} chars"
-                        vis_end = f"1.0 + {n_before + n_len} chars"
-                        try:
-                            self.text_canvas.tag_add(tag, vis_start, vis_end)
-                        except Exception:
-                            pass
-
-                self.text_canvas.config(state="disabled")
-            except Exception:
-                pass
-
-            # Update footers directly
-            try:
-                self.page_number_footer.config(text=f"{self.current_page + 1} / {len(self.pages)}")
-                self.page_label.config(text=f"Chapter {self.current_chapter + 1} of {len(self.spine_items)}")
-            except Exception:
-                pass
-
-            return
-
-        # Use display abstraction to render text and footer
         def apply_tags(widget):
-            # Reapply tags for visible range onto the provided widget
             for tag in self._buffer.tag_names():
                 if tag.startswith("sel"):
                     continue
@@ -518,20 +198,14 @@ class ReaderWindow(tk.Frame):
                     except Exception:
                         pass
 
-        # Render via backend
         try:
             self.display.draw_text(page_text, apply_tags)
         except Exception:
-            # Fallback to direct behavior if draw_text fails
-            try:
-                self.text_canvas.config(state="normal")
-                self.text_canvas.delete("1.0", tk.END)
-                self.text_canvas.insert("1.0", page_text)
-                self.text_canvas.config(state="disabled")
-            except Exception:
-                pass
+            self.text_canvas.config(state="normal")
+            self.text_canvas.delete("1.0", tk.END)
+            self.text_canvas.insert("1.0", page_text)
+            self.text_canvas.config(state="disabled")
 
-        # footer via display
         chapter_text = f"Chapter {self.current_chapter + 1} of {len(self.spine_items)}"
         page_number_text = f"{self.current_page + 1} / {len(self.pages)}"
         try:
@@ -568,12 +242,10 @@ class ReaderWindow(tk.Frame):
         # --- TOC detection ---
         toc_nav = soup.find(lambda tag: (tag.name == "nav" and tag.get("epub:type") == "toc") or (tag.name == "div" and "toc" in tag.get("class", [])))
         if toc_nav:
-            # If <nav epub:type="toc"> is inside a <div class="toc">, use the parent for heading
             toc_container = toc_nav.find_parent("div", class_="toc") or toc_nav
             self._insert_toc_block(toc_container)
             return
 
-        # --- Normal block parsing ---
         blocks = soup.find_all(BLOCK_TAGS)
         filtered = []
         for b in blocks:
@@ -597,16 +269,11 @@ class ReaderWindow(tk.Frame):
             self._buffer.insert("end", "\n")
 
     def _insert_toc_block(self, toc_container):
-        """Render the entire Table of Contents as a single block, with heading and all items on one page."""
-        # Find heading (e.g., h1, .toc-title, etc.)
-        heading = None
-        if toc_container:
-            heading = toc_container.find("h1") or toc_container.find("div", class_="toc-title")
+        heading = toc_container.find("h1") or toc_container.find("div", class_="toc-title")
         if heading:
             self._insert_text_with_tags(heading.get_text(strip=True), ["h1"], self._buffer)
             self._buffer.insert("end", "\n\n")
 
-        # Find the <nav> or <ol>/<ul> containing the ToC entries
         nav = toc_container.find("nav") if toc_container else None
         ol = nav.find("ol") if nav and nav.find("ol") else (toc_container.find("ol") if toc_container else None)
         ul = nav.find("ul") if nav and nav.find("ul") else (toc_container.find("ul") if toc_container else None)
@@ -614,21 +281,17 @@ class ReaderWindow(tk.Frame):
         if list_tag:
             self._insert_toc_list(list_tag, indent=0)
         else:
-            # fallback: just print all links in container
             links = toc_container.find_all("a") if toc_container else []
             for a in links:
                 self._insert_text_with_tags(a.get_text(strip=True), [], self._buffer)
                 self._buffer.insert("end", "\n")
 
     def _insert_toc_list(self, list_tag, indent=0):
-        """Recursively render a <ol> or <ul> as a single block, with indentation for sublists."""
         for li in list_tag.find_all("li", recursive=False):
-            # Find the link and text
             link = li.find("a")
             text = link.get_text(strip=True) if link else li.get_text(strip=True)
             self._insert_text_with_tags(" " * (indent * 4) + text, [], self._buffer)
             self._buffer.insert("end", "\n")
-            # Handle nested lists
             sub_ol = li.find("ol", recursive=False)
             sub_ul = li.find("ul", recursive=False)
             if sub_ol:

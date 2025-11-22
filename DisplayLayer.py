@@ -105,7 +105,7 @@ class TkDisplay(DisplayInterface, DisplayBase):
 
     # -----------------------------
     # Library
-    # -----------------------------
+    # ----------------------------
     def show_library(self, library_items):
         self.clear_container()
         self.library_items = library_items
@@ -117,10 +117,19 @@ class TkDisplay(DisplayInterface, DisplayBase):
 
         canvas = tk.Canvas(self.library_frame, bg="white", highlightthickness=0)
         scrollbar = ttk.Scrollbar(self.library_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
         scrollable_frame = ttk.Frame(canvas)
+
+        # Add scrollable_frame to canvas
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+
         scrollable_frame.bind(
             "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
         for epub_file, meta in self.library_items:
             frame = ttk.Frame(scrollable_frame, padding=8, style="TFrame")
