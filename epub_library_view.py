@@ -47,7 +47,6 @@ def get_epub_metadata(epub_path):
 
     return metadata
 
-
 def load_library():
     import zipfile
     COVERS_DIR.mkdir(exist_ok=True)
