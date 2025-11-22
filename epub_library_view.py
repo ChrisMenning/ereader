@@ -69,9 +69,12 @@ def load_library():
                 if image_files:
                     img_data = z.read(image_files[0])
                     try:
-                        cover_image = Image.open(io.BytesIO(img_data))
+                        img = Image.open(io.BytesIO(img_data))
+                        img = img.convert("L").convert("1")   # 1-bit for e-paper
+                        cover_image = img
                     except Exception:
                         cover_image = None
+
                 meta = {
                     "title": cbz_file.stem,
                     "author": "",
@@ -151,13 +154,18 @@ class LibraryApp(tk.Tk):
             frame = ttk.Frame(scrollable_frame, padding=8, style="TFrame")
             frame.pack(fill="x", pady=4)
 
+            # Convert cover to 1-bit e-paper friendly thumbnail
             if meta["cover_image"]:
                 img = meta["cover_image"].copy()
-                img.thumbnail((60, 90))
-                tk_img = ImageTk.PhotoImage(img)
+                img = img.convert("L")  # grayscale first
+                img = img.resize((60, 90), Image.LANCZOS)
+                img = img.convert("1")  # pure black/white
             else:
-                img = Image.new("RGB", (60, 90), "gray")
-                tk_img = ImageTk.PhotoImage(img)
+                img = Image.new("1", (60, 90), 1)  # white placeholder
+
+            tk_img = ImageTk.PhotoImage(img)
+            self._thumb_refs.append(tk_img)
+
             self._thumb_refs.append(tk_img)
 
             label_img = tk.Label(frame, image=tk_img, bg="white")

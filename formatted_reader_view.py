@@ -195,7 +195,7 @@ class ReaderWindow(tk.Frame):
         visible_height = max(1, canvas_height - 2 * PAGE_MARGIN - footer_space)
 
         # Fudge factor: assume 2 fewer lines than actual
-        fudge_lines = 2
+        fudge_lines = 0
         base_font = self._fonts["base"]
         line_height = int(base_font.metrics("linespace"))
         visible_height -= fudge_lines * line_height
