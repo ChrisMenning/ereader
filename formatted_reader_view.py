@@ -3,6 +3,7 @@ import tkinter.font as tkfont
 from ebooklib import epub
 from bs4 import BeautifulSoup, NavigableString, Tag
 import time
+from config import IS_DEBUG
 
 WINDOW_WIDTH, WINDOW_HEIGHT = 800, 480
 FONT_SIZE_DEFAULT = 14
@@ -14,7 +15,86 @@ INLINE_BOLD = ("strong", "b")
 INLINE_ITALIC = ("em", "i")
 
 
-class ReaderWindow(tk.Frame):    
+# -----------------------
+# Display abstraction
+# -----------------------
+class DisplayInterface:
+    """Abstract interface for display backends.
+
+    Implementations should provide methods to render page text, update footers,
+    and manage focus/clearing. This allows ReaderWindow to be display-agnostic.
+    """
+
+    def clear(self):
+        raise NotImplementedError
+
+    def draw_text(self, text, apply_tags_fn):
+        """Draw the given page text. apply_tags_fn(widget) will be called with the
+        underlying widget to reapply tags/formatting for the visible range.
+        """
+        raise NotImplementedError
+
+    def update_footer(self, chapter_text, page_number_text):
+        raise NotImplementedError
+
+    def focus(self):
+        pass
+
+
+class TkDisplay(DisplayInterface):
+    """Tkinter-based display that wraps the Text widget and footer labels.
+
+    This implementation preserves the original behavior but exposes a small
+    API used by ReaderWindow so we can later provide an EPaperDisplay.
+    """
+
+    def __init__(self, text_widget, page_label_widget, page_number_widget):
+        self.text = text_widget
+        self.page_label = page_label_widget
+        self.page_number = page_number_widget
+
+    def clear(self):
+        try:
+            self.text.config(state="normal")
+            self.text.delete("1.0", tk.END)
+        except Exception:
+            pass
+
+    def draw_text(self, text, apply_tags_fn):
+        try:
+            self.text.config(state="normal")
+            self.text.delete("1.0", tk.END)
+            # Insert raw text
+            self.text.insert("1.0", text)
+            # Apply tags via callback which will call widget.tag_add on self.text
+            try:
+                apply_tags_fn(self.text)
+            except Exception:
+                pass
+            self.text.config(state="disabled")
+        except Exception:
+            pass
+
+    def update_footer(self, chapter_text, page_number_text):
+        try:
+            if self.page_label:
+                self.page_label.config(text=chapter_text)
+            if self.page_number:
+                self.page_number.config(text=page_number_text)
+        except Exception:
+            pass
+
+    def focus(self):
+        try:
+            self.text.focus_set()
+        except Exception:
+            pass
+
+
+# -----------------------
+# ReaderWindow (refactored to use DisplayInterface)
+# -----------------------
+class ReaderWindow(tk.Frame):
     def __init__(self, master, epub_path):
         super().__init__(master, bg="white", width=WINDOW_WIDTH, height=WINDOW_HEIGHT)
         self.epub_path = epub_path
@@ -48,17 +128,30 @@ class ReaderWindow(tk.Frame):
             spacing1=4,
             spacing3=6,
         )
+
+        # Display backend (will be set after widgets are laid out)
+        self.display = None
+
         # Set height after window is mapped
         self.after(100, self._resize_text_canvas)
 
     def _resize_text_canvas(self):
+        # Ensure geometry is computed
         self.update_idletasks()
         footer_height = self.footer_frame.winfo_height() or 40
         total_height = self.main_frame.winfo_height() or WINDOW_HEIGHT
         text_height = max(100, total_height - footer_height)
         self.text_canvas.place(x=0, y=0, width=self.main_frame.winfo_width() or WINDOW_WIDTH, height=text_height)
 
-        # Footer frame (always visible at bottom)
+        # Recreate footer widgets (keeps original behavior)
+        # Destroy and rebuild footer to ensure consistent layout when resizing
+        try:
+            # remove old footer children
+            for c in self.footer_frame.winfo_children():
+                c.destroy()
+        except Exception:
+            pass
+
         self.footer_frame = tk.Frame(self.main_frame, bg="white")
         self.footer_frame.pack(side="bottom", fill="x")
 
@@ -79,11 +172,23 @@ class ReaderWindow(tk.Frame):
         self.define_tags(on_widget=self.text_canvas)
         self._buffer.place(x=-10000, y=-10000, width=WINDOW_WIDTH - 2 * PAGE_MARGIN)
 
+        # Initialize display backend (TkDisplay) with current widget refs
+        self.display = TkDisplay(self.text_canvas, self.page_label, self.page_number_footer)
+
         # Load EPUB
-        self.book = epub.read_epub(self.epub_path)
-        self.spine_items = [item for item in self.book.get_items() if isinstance(item, epub.EpubHtml)]
-        if not self.spine_items:
-            self.spine_items = [item for item in self.book.get_items()]
+        try:
+            self.book = epub.read_epub(self.epub_path)
+        except Exception as e:
+            # If reading fails, create a minimal placeholder book object
+            print(f"Error opening EPUB {self.epub_path}: {e}")
+            self.book = None
+
+        if self.book:
+            self.spine_items = [item for item in self.book.get_items() if isinstance(item, epub.EpubHtml)]
+            if not self.spine_items:
+                self.spine_items = [item for item in self.book.get_items()]
+        else:
+            self.spine_items = []
 
         # State
         self.current_chapter = 0
@@ -96,11 +201,13 @@ class ReaderWindow(tk.Frame):
         # Keyboard fallback
         self.bind_all("<Right>", lambda e: self.next_page())
         self.bind_all("<Left>", lambda e: self.prev_page())
-        self.text_canvas.focus_set()
+        try:
+            self.text_canvas.focus_set()
+        except Exception:
+            pass
 
         self.text_canvas.configure(font=(FONT_FAMILY_DEFAULT, FONT_SIZE_DEFAULT))
         self._buffer.configure(font=(FONT_FAMILY_DEFAULT, FONT_SIZE_DEFAULT))
-
 
     # ---------- Tag setup ----------
     def define_tags(self, on_widget=None):
@@ -410,43 +517,105 @@ class ReaderWindow(tk.Frame):
 
     # ---------- Page display ----------
     def display_page(self):
-        if not self.pages or not self._buffer.winfo_exists():
+        if not self.pages or not getattr(self, "_buffer", None) or not self._buffer.winfo_exists():
             return
 
         self.current_page = max(0, min(self.current_page, len(self.pages) - 1))
         start, end = self.pages[self.current_page]
 
         page_text = self._buffer.get(start, end)
-        self.text_canvas.config(state="normal")
-        self.text_canvas.delete("1.0", tk.END)
-        self.text_canvas.insert("1.0", page_text)
 
-        # Copy formatting
-        for tag in self._buffer.tag_names():
-            if tag.startswith("sel"):
-                continue
-            ranges = self._buffer.tag_ranges(tag)
-            for i in range(0, len(ranges), 2):
-                rstart, rend = ranges[i], ranges[i + 1]
-                if self._buffer.compare(rend, "<=", start) or self._buffer.compare(rstart, ">=", end):
-                    continue
-                overlap_start = rstart if self._buffer.compare(rstart, ">", start) else start
-                overlap_end = rend if self._buffer.compare(rend, "<", end) else end
-                n_before = len(self._buffer.get(start, overlap_start))
-                n_len = len(self._buffer.get(overlap_start, overlap_end))
-                if n_len <= 0:
-                    continue
-                vis_start = f"1.0 + {n_before} chars"
-                vis_end = f"1.0 + {n_before + n_len} chars"
-                try:
-                    self.text_canvas.tag_add(tag, vis_start, vis_end)
-                except Exception:
-                    pass
+        # If no display backend is present, fall back to original direct manipulation
+        if not self.display:
+            try:
+                self.text_canvas.config(state="normal")
+                self.text_canvas.delete("1.0", tk.END)
+                self.text_canvas.insert("1.0", page_text)
 
-        self.text_canvas.config(state="disabled")
-        # Remove overlay page number, update footer
-        self.page_number_footer.config(text=f"{self.current_page + 1} / {len(self.pages)}")
-        self.page_label.config(text=f"Chapter {self.current_chapter + 1} of {len(self.spine_items)}")
+                # Copy formatting
+                for tag in self._buffer.tag_names():
+                    if tag.startswith("sel"):
+                        continue
+                    ranges = self._buffer.tag_ranges(tag)
+                    for i in range(0, len(ranges), 2):
+                        rstart, rend = ranges[i], ranges[i + 1]
+                        if self._buffer.compare(rend, "<=", start) or self._buffer.compare(rstart, ">=", end):
+                            continue
+                        overlap_start = rstart if self._buffer.compare(rstart, ">", start) else start
+                        overlap_end = rend if self._buffer.compare(rend, "<", end) else end
+                        n_before = len(self._buffer.get(start, overlap_start))
+                        n_len = len(self._buffer.get(overlap_start, overlap_end))
+                        if n_len <= 0:
+                            continue
+                        vis_start = f"1.0 + {n_before} chars"
+                        vis_end = f"1.0 + {n_before + n_len} chars"
+                        try:
+                            self.text_canvas.tag_add(tag, vis_start, vis_end)
+                        except Exception:
+                            pass
+
+                self.text_canvas.config(state="disabled")
+            except Exception:
+                pass
+
+            # Update footers directly
+            try:
+                self.page_number_footer.config(text=f"{self.current_page + 1} / {len(self.pages)}")
+                self.page_label.config(text=f"Chapter {self.current_chapter + 1} of {len(self.spine_items)}")
+            except Exception:
+                pass
+
+            return
+
+        # Use display abstraction to render text and footer
+        def apply_tags(widget):
+            # Reapply tags for visible range onto the provided widget
+            for tag in self._buffer.tag_names():
+                if tag.startswith("sel"):
+                    continue
+                ranges = self._buffer.tag_ranges(tag)
+                for i in range(0, len(ranges), 2):
+                    rstart, rend = ranges[i], ranges[i + 1]
+                    if self._buffer.compare(rend, "<=", start) or self._buffer.compare(rstart, ">=", end):
+                        continue
+                    overlap_start = rstart if self._buffer.compare(rstart, ">", start) else start
+                    overlap_end = rend if self._buffer.compare(rend, "<", end) else end
+                    n_before = len(self._buffer.get(start, overlap_start))
+                    n_len = len(self._buffer.get(overlap_start, overlap_end))
+                    if n_len <= 0:
+                        continue
+                    vis_start = f"1.0 + {n_before} chars"
+                    vis_end = f"1.0 + {n_before + n_len} chars"
+                    try:
+                        widget.tag_add(tag, vis_start, vis_end)
+                    except Exception:
+                        pass
+
+        # Render via backend
+        try:
+            self.display.draw_text(page_text, apply_tags)
+        except Exception:
+            # Fallback to direct behavior if draw_text fails
+            try:
+                self.text_canvas.config(state="normal")
+                self.text_canvas.delete("1.0", tk.END)
+                self.text_canvas.insert("1.0", page_text)
+                self.text_canvas.config(state="disabled")
+            except Exception:
+                pass
+
+        # footer via display
+        chapter_text = f"Chapter {self.current_chapter + 1} of {len(self.spine_items)}"
+        page_number_text = f"{self.current_page + 1} / {len(self.pages)}"
+        try:
+            self.display.update_footer(chapter_text, page_number_text)
+        except Exception:
+            pass
+
+        try:
+            self.display.focus()
+        except Exception:
+            pass
 
     # ---------- Navigation ----------
     def next_page(self):
