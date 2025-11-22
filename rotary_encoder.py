@@ -6,22 +6,32 @@ class RotaryEncoder:
     """
     Rotary encoder event handler using lgpio.
     Usage:
-        encoder = RotaryEncoder(clk_pin, dt_pin, sw_pin)
+        encoder = RotaryEncoder(isDebugMode=True)
         encoder.on_rotate = lambda direction: print("Rotated", direction)
         encoder.on_button = lambda: print("Button pressed!")
         encoder.start()
         ...
         encoder.stop()
     """
-    def __init__(self, clk_board=11, dt_board=16, sw_board=18,
+    def __init__(self, isDebugMode=True,
+                 clk_board=11, dt_board=16, sw_board=18,
                  board_to_bcm=None,
                  button_debounce=0.05, rotary_debounce=0.002, sample_interval=0.001):
-        if board_to_bcm is None:
-            board_to_bcm = {11: 17, 16: 23, 18: 24}
+        
+        self.isDebugMode = isDebugMode
 
-        self.CLK = board_to_bcm[clk_board]
-        self.DT  = board_to_bcm[dt_board]
-        self.SW  = board_to_bcm[sw_board]
+        if self.isDebugMode:
+            # Debug machine pin mapping (default)
+            if board_to_bcm is None:
+                board_to_bcm = {11: 17, 16: 23, 18: 24}
+            self.CLK = board_to_bcm[clk_board]
+            self.DT  = board_to_bcm[dt_board]
+            self.SW  = board_to_bcm[sw_board]
+        else:
+            # Ereader pin mapping
+            self.CLK = 29
+            self.DT  = 31
+            self.SW  = 33
 
         self.button_debounce = button_debounce
         self.rotary_debounce = rotary_debounce

@@ -8,6 +8,7 @@ from formatted_reader_view import ReaderWindow
 from cbz_reader_view import CBZReaderWindow
 from rotary_encoder import RotaryEncoder
 import time
+from config import IS_DEBUG
 
 # ---------- CONFIG ----------
 EBOOKS_DIR = Path("ebooks")
@@ -112,7 +113,7 @@ class LibraryApp(tk.Tk):
         style.configure("ModalSelected.TFrame", background="#d0ebff")
 
         # Initialize encoder
-        self.encoder = RotaryEncoder(clk_board=11, dt_board=16, sw_board=18)
+        self.encoder = RotaryEncoder(isDebugMode=IS_DEBUG)
         self.encoder.start()
 
         self.encoder.on_rotate = self._library_rotate
