@@ -1,3 +1,4 @@
+# epub_library_view.py
 import tkinter as tk
 from tkinter import ttk
 from ebooklib import epub
@@ -9,6 +10,8 @@ from cbz_reader_view import CBZReaderWindow
 from rotary_encoder import RotaryEncoder
 import time
 from config import IS_DEBUG
+from abc import ABC, abstractmethod
+import zipfile
 
 # ---------- CONFIG ----------
 EBOOKS_DIR = Path("ebooks")
@@ -49,7 +52,6 @@ def get_epub_metadata(epub_path):
     return metadata
 
 def load_library():
-    import zipfile
     COVERS_DIR.mkdir(exist_ok=True)
     library = []
     # EPUBs
@@ -88,56 +90,92 @@ def load_library():
             print(f"Error reading {cbz_file}: {e}")
     return library
 
+# ---------- Display Abstraction ----------
+class DisplayBase(ABC):
+    """
+    Abstract display API. Implementations should manage rendering the library
+    and reader UI and expose the currently-open reader object (if any).
+    """
 
-# ---------- GUI ----------
-class LibraryApp(tk.Tk):
-    def __init__(self):
-        self._last_action_time = 0
-        self._debounce_delay = 0.3
-        super().__init__()
-        self.title("E-Book Library")
-        self.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
-        self.configure(bg="white")
+    def __init__(self, container):
+        self.container = container
+        self.current_reader = None
 
-        self.container = tk.Frame(self, bg="white")
-        self.container.pack(fill="both", expand=True)
+    @abstractmethod
+    def clear_container(self):
+        """Clear the container from any display-specific widgets."""
+        pass
 
-        self._thumb_refs = []
+    @abstractmethod
+    def show_library(self, library_items):
+        """
+        Render the library view given the list of (path, metadata) tuples.
+        Implementations must track selection and expose:
+          - move_selection(delta)
+          - get_selected_item()
+          - open_selected()
+        """
+        pass
+
+    @abstractmethod
+    def move_selection(self, delta):
+        """Move the library selection by delta (positive or negative)."""
+        pass
+
+    @abstractmethod
+    def get_selected_item(self):
+        """Return the currently selected library item (path, meta)."""
+        pass
+
+    @abstractmethod
+    def open_selected(self):
+        """Open the currently selected item (simulate pressing the 'open' button)."""
+        pass
+
+    @abstractmethod
+    def show_reader(self, book_path):
+        """
+        Create and display a reader for `book_path`. Should set self.current_reader
+        to the ReaderWindow / CBZReaderWindow instance and return a title_text.
+        """
+        pass
+
+    # Convenience wrappers that simply call into the reader object if available:
+    def next_page(self):
+        if self.current_reader and hasattr(self.current_reader, "next_page"):
+            self.current_reader.next_page()
+
+    def prev_page(self):
+        if self.current_reader and hasattr(self.current_reader, "prev_page"):
+            self.current_reader.prev_page()
+
+    def load_chapter(self, chap):
+        if self.current_reader and hasattr(self.current_reader, "load_chapter"):
+            self.current_reader.load_chapter(chap)
+
+    def display_page(self):
+        if self.current_reader and hasattr(self.current_reader, "display_page"):
+            self.current_reader.display_page()
+
+# ---------- Tkinter Display Implementation ----------
+class TkDisplay(DisplayBase):
+    def __init__(self, container):
+        super().__init__(container)
+        # Library state:
         self.library_items = []
+        self._thumb_refs = []
         self.selected_index = 0
-        self.current_view = "library"
 
-        style = ttk.Style()
-        style.configure("Selected.TFrame", background="#d0ebff")
-        style.configure("Modal.TFrame", background="#eeeeee")
-        style.configure("ModalSelected.TFrame", background="#d0ebff")
-
-        # Initialize encoder
-        self.encoder = RotaryEncoder(isDebugMode=IS_DEBUG)
-        self.encoder.start()
-
-        self.encoder.on_rotate = self._library_rotate
-        self.encoder.on_button = self._library_button
-
-        # ---------- Bookmarks ----------
-        self.bookmarks = {}  # book path → (chapter_index, page_index)
-
-        self.show_library()
-
-    # ---------- Container helpers ----------
+    # --- Helpers ---
     def clear_container(self):
         for w in self.container.winfo_children():
             w.destroy()
         self._thumb_refs.clear()
 
-    # ---------- Library ----------
-    def show_library(self):
-        self.current_view = "library"
+    # --- Library UI (moved from LibraryApp.show_library) ---
+    def show_library(self, library_items):
         self.clear_container()
-
-        # Reset encoder callbacks
-        self.encoder.on_rotate = self._library_rotate
-        self.encoder.on_button = self._library_button
+        self.library_items = library_items
 
         canvas = tk.Canvas(self.container, bg="white", highlightthickness=0)
         scrollbar = ttk.Scrollbar(self.container, orient="vertical", command=canvas.yview)
@@ -149,30 +187,30 @@ class LibraryApp(tk.Tk):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        self.library_items = load_library()
         for epub_file, meta in self.library_items:
             frame = ttk.Frame(scrollable_frame, padding=8, style="TFrame")
             frame.pack(fill="x", pady=4)
 
             # Convert cover to 1-bit e-paper friendly thumbnail
-            if meta["cover_image"]:
-                img = meta["cover_image"].copy()
-                img = img.convert("L")  # grayscale first
-                img = img.resize((60, 90), Image.LANCZOS)
-                img = img.convert("1")  # pure black/white
+            if meta.get("cover_image"):
+                try:
+                    img = meta["cover_image"].copy()
+                    img = img.convert("L")  # grayscale first
+                    img = img.resize((60, 90), Image.LANCZOS)
+                    img = img.convert("1")  # pure black/white
+                except Exception:
+                    img = Image.new("1", (60, 90), 1)
             else:
                 img = Image.new("1", (60, 90), 1)  # white placeholder
 
             tk_img = ImageTk.PhotoImage(img)
             self._thumb_refs.append(tk_img)
 
-            self._thumb_refs.append(tk_img)
-
             label_img = tk.Label(frame, image=tk_img, bg="white")
             label_img.image = tk_img
             label_img.pack(side="left", padx=(0, 10))
 
-            info_text = f"{meta['title']}\nby {meta['author']}\n({meta['language']})"
+            info_text = f"{meta.get('title','Untitled')}\nby {meta.get('author','')}\n({meta.get('language','')})"
             label_text = tk.Label(frame, text=info_text, justify="left", bg="white", anchor="w")
             label_text.pack(side="left", fill="x", expand=True)
 
@@ -191,28 +229,26 @@ class LibraryApp(tk.Tk):
         except Exception:
             pass
 
-    def _library_rotate(self, direction):
-        if direction == "CLOCKWISE":
-            self._move_selection(1)
-        else:
-            self._move_selection(-1)
-
-    def _move_selection(self, delta):
+    def move_selection(self, delta):
         if not self.library_items:
             return
         self.selected_index = (self.selected_index + delta) % len(self.library_items)
         self._highlight_selected()
 
-    def _library_button(self):
+    def get_selected_item(self):
         if not self.library_items:
-            return
-        epub_path, _ = self.library_items[self.selected_index]
-        print(f"[DEBUG] Opening reader for: {epub_path}")
-        self.show_reader(epub_path)
+            return None
+        return self.library_items[self.selected_index]
 
-    # ---------- Reader ----------
+    def open_selected(self):
+        sel = self.get_selected_item()
+        if sel:
+            book_path, _ = sel
+            return self.show_reader(book_path)
+        return None
+
+    # --- Reader UI (moved from LibraryApp.show_reader) ---
     def show_reader(self, book_path):
-        self.current_view = "reader"
         self.clear_container()
 
         ext = str(book_path).lower()
@@ -225,12 +261,10 @@ class LibraryApp(tk.Tk):
             reader_frame.pack(fill="both", expand=True)
             title_label = ttk.Label(self.container, text=title_text, font=("TkDefaultFont", 14))
             title_label.pack(side="top", pady=(4, 0))
-            # No bookmarks/modal for CBZ for now
-            self.current_book_path = book_path
             self.current_reader = reader_frame
-            return
+            return title_text
 
-        # EPUB fallback (default)
+        # EPUB fallback
         try:
             book = epub.read_epub(book_path)
             title_md = book.get_metadata("DC", "title")
@@ -244,6 +278,81 @@ class LibraryApp(tk.Tk):
         title_label = ttk.Label(self.container, text=title_text, font=("TkDefaultFont", 14))
         title_label.pack(side="top", pady=(4, 0))
 
+        self.current_reader = reader_frame
+        return title_text
+
+# ---------- Application ----------
+class LibraryApp(tk.Tk):
+    def __init__(self):
+        self._last_action_time = 0
+        self._debounce_delay = 0.3
+        super().__init__()
+        self.title("E-Book Library")
+        self.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
+        self.configure(bg="white")
+
+        self.container = tk.Frame(self, bg="white")
+        self.container.pack(fill="both", expand=True)
+
+        style = ttk.Style()
+        style.configure("Selected.TFrame", background="#d0ebff")
+        style.configure("Modal.TFrame", background="#eeeeee")
+        style.configure("ModalSelected.TFrame", background="#d0ebff")
+
+        # Initialize encoder
+        self.encoder = RotaryEncoder(isDebugMode=IS_DEBUG)
+        self.encoder.start()
+
+        # ---------- Bookmarks ----------
+        self.bookmarks = {}  # book path → (chapter_index, page_index)
+
+        # Choose display based on debug flag (for now: TkDisplay when IS_DEBUG True)
+        # You can swap this to an EPaperDisplay when you implement it.
+        self.display = TkDisplay(self.container)
+
+        # Wire encoder defaults to library actions until show_library replaces them
+        self.encoder.on_rotate = lambda direction: self.display.move_selection(1 if direction == "CLOCKWISE" else -1)
+        self.encoder.on_button = lambda: self._open_selection_from_encoder()
+
+        # Show initial library
+        self.show_library()
+
+    # ---------- Container helpers ----------
+    def clear_container(self):
+        self.display.clear_container()
+
+    # ---------- Library ----------
+    def show_library(self):
+        self.current_view = "library"
+        self.clear_container()
+
+        # Reset encoder callbacks to operate the library selection
+        self.encoder.on_rotate = lambda direction: self.display.move_selection(1 if direction == "CLOCKWISE" else -1)
+        self.encoder.on_button = lambda: self._open_selection_from_encoder()
+
+        self.library_items = load_library()
+        self.display.show_library(self.library_items)
+        # ensure selected index is local-copy aligned (display holds index)
+        # (LibraryApp no longer needs to manipulate selection directly.)
+
+    def _open_selection_from_encoder(self):
+        if not getattr(self, "library_items", None):
+            return
+        sel = self.display.get_selected_item()
+        if not sel:
+            return
+        epub_path, _ = sel
+        print(f"[DEBUG] Opening reader for: {epub_path}")
+        self.show_reader(epub_path)
+
+    # ---------- Reader ----------
+    def show_reader(self, book_path):
+        self.current_view = "reader"
+        self.clear_container()
+
+        title_text = self.display.show_reader(book_path)
+        # display.show_reader sets display.current_reader
+
         # ---------- Modal state ----------
         self.modal_active = False
         self.modal_index = 0
@@ -251,9 +360,9 @@ class LibraryApp(tk.Tk):
         self.modal_frame = None
         self.modal_buttons = []
         self.current_book_path = book_path
-        self.current_reader = reader_frame
+        self.current_reader = self.display.current_reader
 
-        # ---------- Encoder callbacks ----------
+        # ---------- Encoder callbacks for reader + modal ----------
         def on_rotate(direction):
             if self.modal_active:
                 if direction == "CLOCKWISE":
@@ -263,9 +372,9 @@ class LibraryApp(tk.Tk):
                 self._update_modal_selection()
             else:
                 if direction == "CLOCKWISE":
-                    reader_frame.next_page()
+                    self.display.next_page()
                 else:
-                    reader_frame.prev_page()
+                    self.display.prev_page()
 
         def on_button():
             now = time.time()
@@ -309,15 +418,16 @@ class LibraryApp(tk.Tk):
 
     def _select_modal_option(self):
         option = self.modal_options[self.modal_index]
-        self.modal_frame.destroy()
+        if self.modal_frame:
+            self.modal_frame.destroy()
         self.modal_active = False
 
         if option == "Back to Library":
             self.show_library()
         elif option == "Drop Bookmark":
             # Save current chapter/page
-            chap = self.current_reader.current_chapter
-            page = self.current_reader.current_page
+            chap = getattr(self.current_reader, "current_chapter", None)
+            page = getattr(self.current_reader, "current_page", None)
             self.bookmarks[self.current_book_path] = (chap, page)
             print(f"[DEBUG] Bookmark saved at chapter {chap}, page {page}")
         elif option == "Go to Bookmark":
@@ -325,9 +435,11 @@ class LibraryApp(tk.Tk):
             bm = self.bookmarks.get(self.current_book_path)
             if bm:
                 chap, page = bm
-                self.current_reader.load_chapter(chap)
-                self.current_reader.current_page = page
-                self.current_reader.display_page()
+                self.display.load_chapter(chap)
+                # note: some ReaderWindow implementations expect current_page to be set
+                if hasattr(self.display.current_reader, "current_page"):
+                    self.display.current_reader.current_page = page
+                self.display.display_page()
                 print(f"[DEBUG] Jumped to bookmark at chapter {chap}, page {page}")
             else:
                 print("[DEBUG] No bookmark found for this book")
@@ -335,7 +447,7 @@ class LibraryApp(tk.Tk):
 
 if __name__ == "__main__":
     if not EBOOKS_DIR.exists():
-        print(f"⚠️  Folder '{EBOOKS_DIR}' not found. Create it and add EPUB files.")
+        print(f"⚠️  Folder '{EBOOKS_DIR}' not found. Create it and add EPUB/CBZ files.")
     else:
         app = LibraryApp()
         app.mainloop()
