@@ -5,6 +5,9 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 import time
 from config import IS_DEBUG
 
+# Import display layer classes
+from DisplayLayer import DisplayInterface, TkDisplay
+
 WINDOW_WIDTH, WINDOW_HEIGHT = 800, 480
 FONT_SIZE_DEFAULT = 14
 FONT_FAMILY_DEFAULT = "LiberationSerif"
@@ -13,82 +16,6 @@ PAGE_MARGIN = 16  # padding around text edges
 BLOCK_TAGS = ("p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "pre", "div")
 INLINE_BOLD = ("strong", "b")
 INLINE_ITALIC = ("em", "i")
-
-
-# -----------------------
-# Display abstraction
-# -----------------------
-class DisplayInterface:
-    """Abstract interface for display backends.
-
-    Implementations should provide methods to render page text, update footers,
-    and manage focus/clearing. This allows ReaderWindow to be display-agnostic.
-    """
-
-    def clear(self):
-        raise NotImplementedError
-
-    def draw_text(self, text, apply_tags_fn):
-        """Draw the given page text. apply_tags_fn(widget) will be called with the
-        underlying widget to reapply tags/formatting for the visible range.
-        """
-        raise NotImplementedError
-
-    def update_footer(self, chapter_text, page_number_text):
-        raise NotImplementedError
-
-    def focus(self):
-        pass
-
-
-class TkDisplay(DisplayInterface):
-    """Tkinter-based display that wraps the Text widget and footer labels.
-
-    This implementation preserves the original behavior but exposes a small
-    API used by ReaderWindow so we can later provide an EPaperDisplay.
-    """
-
-    def __init__(self, text_widget, page_label_widget, page_number_widget):
-        self.text = text_widget
-        self.page_label = page_label_widget
-        self.page_number = page_number_widget
-
-    def clear(self):
-        try:
-            self.text.config(state="normal")
-            self.text.delete("1.0", tk.END)
-        except Exception:
-            pass
-
-    def draw_text(self, text, apply_tags_fn):
-        try:
-            self.text.config(state="normal")
-            self.text.delete("1.0", tk.END)
-            # Insert raw text
-            self.text.insert("1.0", text)
-            # Apply tags via callback which will call widget.tag_add on self.text
-            try:
-                apply_tags_fn(self.text)
-            except Exception:
-                pass
-            self.text.config(state="disabled")
-        except Exception:
-            pass
-
-    def update_footer(self, chapter_text, page_number_text):
-        try:
-            if self.page_label:
-                self.page_label.config(text=chapter_text)
-            if self.page_number:
-                self.page_number.config(text=page_number_text)
-        except Exception:
-            pass
-
-    def focus(self):
-        try:
-            self.text.focus_set()
-        except Exception:
-            pass
 
 
 # -----------------------

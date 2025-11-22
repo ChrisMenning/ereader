@@ -2,8 +2,27 @@
 # Full TkDisplay implementation compatible with LibraryApp
 
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk
 from PIL import Image, ImageTk
+
+WINDOW_WIDTH, WINDOW_HEIGHT = 800, 480
+FONT_SIZE_DEFAULT = 14
+FONT_FAMILY_DEFAULT = "LiberationSerif"
+PAGE_MARGIN = 16
+
+class DisplayInterface:
+    def clear(self):
+        raise NotImplementedError
+
+    def draw_text(self, text, apply_tags_fn):
+        raise NotImplementedError
+
+    def update_footer(self, chapter_text, page_number_text):
+        raise NotImplementedError
+
+    def focus(self):
+        pass
 
 class DisplayBase:
     """Abstract display interface for library and reader views."""
@@ -48,8 +67,8 @@ class DisplayBase:
         raise NotImplementedError
 
 
-class TkDisplay(DisplayBase):
-    def __init__(self, root):
+class TkDisplay(DisplayInterface, DisplayBase):
+    def __init__(self, root, text_widget=None, page_label_widget=None, page_number_widget=None):
         self.root = root
         self.current_reader = None
         self.library_items = []
@@ -62,6 +81,11 @@ class TkDisplay(DisplayBase):
         self.reader_text = None
         self.chapter_label = None
         self.page_label = None
+
+        # For text display (reader view)
+        self.text = text_widget
+        self.page_label_widget = page_label_widget
+        self.page_number_widget = page_number_widget
 
     # -----------------------------
     # Container
@@ -97,11 +121,6 @@ class TkDisplay(DisplayBase):
         scrollable_frame.bind(
             "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
-
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
 
         for epub_file, meta in self.library_items:
             frame = ttk.Frame(scrollable_frame, padding=8, style="TFrame")
@@ -236,3 +255,41 @@ class TkDisplay(DisplayBase):
         self.modal = None
         self.modal_var = None
         self.modal_buttons = []
+
+    # -----------------------------
+    # Text display methods (for reader view)
+    # -----------------------------
+    def clear(self):
+        try:
+            self.text.config(state="normal")
+            self.text.delete("1.0", tk.END)
+        except Exception:
+            pass
+
+    def draw_text(self, text, apply_tags_fn):
+        try:
+            self.text.config(state="normal")
+            self.text.delete("1.0", tk.END)
+            self.text.insert("1.0", text)
+            try:
+                apply_tags_fn(self.text)
+            except Exception:
+                pass
+            self.text.config(state="disabled")
+        except Exception:
+            pass
+
+    def update_footer(self, chapter_text, page_number_text):
+        try:
+            if self.page_label_widget:
+                self.page_label_widget.config(text=chapter_text)
+            if self.page_number_widget:
+                self.page_number_widget.config(text=page_number_text)
+        except Exception:
+            pass
+
+    def focus(self):
+        try:
+            self.text.focus_set()
+        except Exception:
+            pass
