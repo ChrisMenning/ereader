@@ -180,6 +180,8 @@ class ReaderWindow(tk.Frame):
 
     # ---------- Pagination ----------
     def _build_pages(self):
+        import re
+
         self.update_idletasks()
         try:
             self._buffer.update_idletasks()
@@ -219,41 +221,182 @@ class ReaderWindow(tk.Frame):
 
         paragraph_spacing = line_height  # treat every paragraph break as at least one line
 
+        def measure_height(start_idx, end_idx):
+            """Return pixel height estimate for text between start_idx and end_idx."""
+            try:
+                raw_count = self._buffer.count(start_idx, end_idx, "displaylines")
+            except Exception:
+                raw_count = None
+            display_lines = (raw_count[0] if raw_count else 1) or 1
+
+            font_obj, spacing1, spacing3 = pick_font_for_index(start_idx)
+            try:
+                line_space = int(font_obj.metrics("linespace"))
+            except Exception:
+                line_space = FONT_SIZE_DEFAULT + 4
+
+            # Count explicit newlines and add paragraph spacing
+            try:
+                chunk_text = self._buffer.get(start_idx, end_idx)
+            except Exception:
+                chunk_text = ""
+            newline_count = chunk_text.count("\n")
+            added_height = display_lines * line_space + spacing1 + spacing3 + newline_count * paragraph_spacing
+            return added_height
+
+        # Helper to align a candidate end index to a safe word boundary (if reasonable).
+        def align_to_word(start_idx, candidate_idx):
+            if self._buffer.compare(candidate_idx, ">=", buf_end):
+                return buf_end
+            try:
+                txt = self._buffer.get(start_idx, candidate_idx)
+            except Exception:
+                return candidate_idx
+            # If the last char is whitespace, it's already aligned
+            if not txt:
+                return candidate_idx
+            if txt[-1].isspace():
+                return candidate_idx
+            # Find last whitespace in the chunk; keep at least 1 char if no whitespace found.
+            m = re.search(r'\s+\S*$', txt)
+            if m:
+                cutoff = m.start()
+                # if cutoff==0, that means first char(s) is whitespace, allow it
+                if cutoff <= 0:
+                    return candidate_idx
+                try:
+                    return self._buffer.index(f"{start_idx} +{cutoff} chars")
+                except Exception:
+                    return candidate_idx
+            # No whitespace found — return the raw candidate (will be handled to avoid infinite loops)
+            return candidate_idx
+
         while self._buffer.compare(start_index, "<", buf_end):
             page_start = start_index
             used_pixels = 0
             idx = start_index
 
+            # We'll search for the largest chunk starting at idx that fits the visible box.
+            # Exponential growth to find an upper bound, then binary search between last-good and upper bound.
+            # Start with a small step (50 chars) to avoid overshoot on narrow lines.
+            step = 50
+            last_good_end = idx
+            upper_end = None
+
+            # If the very first small chunk already overflows, we'll still include at least one chunk to avoid infinite loop.
             while True:
-                chunk_end = self._buffer.index(f"{idx} +50 chars")
-                if self._buffer.compare(chunk_end, ">", buf_end):
-                    chunk_end = buf_end
-
-                display_lines = self._buffer.count(idx, chunk_end, "displaylines")[0] or 1
-                font_obj, spacing1, spacing3 = pick_font_for_index(idx)
                 try:
-                    line_space = int(font_obj.metrics("linespace"))
+                    raw_candidate = self._buffer.index(f"{idx} +{step} chars")
                 except Exception:
-                    line_space = FONT_SIZE_DEFAULT + 4
+                    raw_candidate = buf_end
+                # clamp
+                if self._buffer.compare(raw_candidate, ">", buf_end):
+                    raw_candidate = buf_end
 
-                added_height = display_lines * line_space + spacing1 + spacing3
+                candidate = align_to_word(idx, raw_candidate)
 
-                # --- NEW: Add paragraph spacing for any newline in this chunk ---
-                chunk_text = self._buffer.get(idx, chunk_end)
-                newline_count = chunk_text.count("\n")
-                added_height += newline_count * paragraph_spacing
+                # Ensure candidate actually moves forward; if not, fall back to raw_candidate, then force 1 char
+                if self._buffer.compare(candidate, "<=", idx):
+                    # try raw_candidate (maybe it was buf_end)
+                    candidate = raw_candidate
+                    if self._buffer.compare(candidate, "<=", idx):
+                        # Force small advance of one char to prevent infinite loops
+                        try:
+                            candidate = self._buffer.index(f"{idx} +1 chars")
+                        except Exception:
+                            candidate = buf_end
 
-                # Stop if this chunk would overflow
-                if used_pixels + added_height > visible_height - bottom_margin:
-                    if self._buffer.compare(idx, "==", page_start):
-                        # very tall single chunk: still include
-                        idx = chunk_end
+                h = measure_height(idx, candidate)
+                if h > visible_height - bottom_margin:
+                    # candidate does not fit; upper bound found
+                    upper_end = candidate
                     break
+                else:
+                    last_good_end = candidate
+                    # If we reached end of buffer, stop
+                    if self._buffer.compare(candidate, ">=", buf_end):
+                        upper_end = candidate
+                        break
+                    # Grow step and continue
+                    step = step * 2
 
+            # If nothing fit (last_good_end == idx), we must include at least something: use upper_end
+            if self._buffer.compare(last_good_end, "==", idx):
+                # include at least up to upper_end (even if it overflows)
+                chosen_end = upper_end
+            elif self._buffer.compare(last_good_end, ">=", upper_end if upper_end is not None else buf_end):
+                chosen_end = last_good_end
+            else:
+                # Binary search between last_good_end and upper_end to find the largest fitting chunk
+                # Convert to char counts relative to idx
+                try:
+                    low_count = len(self._buffer.get(idx, last_good_end))
+                    high_count = len(self._buffer.get(idx, upper_end))
+                except Exception:
+                    # Fallback: use the last_good_end if anything goes wrong
+                    chosen_end = last_good_end
+                else:
+                    low = low_count
+                    high = high_count
+                    best = low
+                    while low <= high:
+                        mid = (low + high) // 2
+                        try:
+                            mid_end = self._buffer.index(f"{idx} +{mid} chars")
+                        except Exception:
+                            mid_end = upper_end
+                        if self._buffer.compare(mid_end, ">", buf_end):
+                            mid_end = buf_end
+                        aligned_mid_end = align_to_word(idx, mid_end)
+                        # Ensure progress
+                        if self._buffer.compare(aligned_mid_end, "<=", idx):
+                            aligned_mid_end = mid_end
+                            if self._buffer.compare(aligned_mid_end, "<=", idx):
+                                try:
+                                    aligned_mid_end = self._buffer.index(f"{idx} +1 chars")
+                                except Exception:
+                                    aligned_mid_end = buf_end
+
+                        hmid = measure_height(idx, aligned_mid_end)
+                        if hmid <= visible_height - bottom_margin:
+                            best = max(best, mid)
+                            low = mid + 1
+                        else:
+                            high = mid - 1
+
+                    # final chosen_end based on best
+                    try:
+                        chosen_end = self._buffer.index(f"{idx} +{best} chars")
+                    except Exception:
+                        chosen_end = last_good_end
+                    if self._buffer.compare(chosen_end, ">", buf_end):
+                        chosen_end = buf_end
+                    chosen_end = align_to_word(idx, chosen_end)
+
+                    # Ensure we advance; otherwise fallback
+                    if self._buffer.compare(chosen_end, "<=", idx):
+                        chosen_end = last_good_end
+
+            # Compute height and decide whether to accept; if it still doesn't fit but it's the only thing,
+            # accept it to make progress.
+            added_height = measure_height(idx, chosen_end)
+
+            if used_pixels + added_height > visible_height - bottom_margin and self._buffer.compare(idx, "==", page_start):
+                # extremely tall single chunk - include it to avoid infinite loop
+                idx = chosen_end
+            elif used_pixels + added_height > visible_height - bottom_margin:
+                # wouldn't fit, finish the page
+                pass
+            else:
                 used_pixels += added_height
-                idx = chunk_end
-                if self._buffer.compare(idx, ">=", buf_end):
-                    break
+                idx = chosen_end
+
+            # If idx didn't advance for any reason, force at least one char forward to avoid infinite loop.
+            if self._buffer.compare(idx, "<=", page_start):
+                try:
+                    idx = self._buffer.index(f"{page_start} +1 chars")
+                except Exception:
+                    idx = buf_end
 
             pages.append((page_start, idx))
             start_index = idx
@@ -263,6 +406,7 @@ class ReaderWindow(tk.Frame):
         if not pages:
             pages = [("1.0", "end")]
         return pages
+
 
     # ---------- Page display ----------
     def display_page(self):
